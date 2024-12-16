@@ -50,8 +50,8 @@ fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow
         "--force_index",
         // "--num_querys_per_fa", "4000000",
         
-        "--kmer", "12",
-        "--wins", "8",
+        "--kmer", "15",
+        "--wins", "10",
 
         "--s_m", "2",
         "--s_mm", "4",
