@@ -21,7 +21,9 @@ dependencies = [
  "lazy_static",
  "mm2",
  "ndarray 0.16.1",
+ "num_cpus",
  "rust-htslib",
+ "time",
  "tracing",
  "tracing-subscriber",
 ]

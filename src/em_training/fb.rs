@@ -1,6 +1,6 @@
 use ndarray::Array2;
 
-use crate::model::{encode_2_bases, HmmModel, Move, Template, TemplatePos};
+use super::model::{encode_2_bases, HmmModel, Move, Template, TemplatePos};
 
 /// forward backward
 
@@ -167,7 +167,7 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
 
 #[cfg(test)]
 mod test {
-    use crate::model::{HmmModel, Template};
+    use crate::em_training::model::{HmmModel, Template};
 
     use super::{backward, forward};
 

@@ -1,9 +1,34 @@
+use clap::Parser;
+use cli::Subcommands;
+use supervised_training::{train::train_model_entrance, train_data::train_data_main};
 
-mod model;
 mod cli;
-mod supervised_training;
 mod em_training;
+mod supervised_training;
 
 fn main() {
-    println!("Hello, world!");
+    let time_fmt = time::format_description::parse(
+        "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
+    )
+    .unwrap();
+
+    // let timer = tracing_subscriber::fmt::time::OffsetTime::new(time_offset, time_fmt);
+    // let timer = tracing_subscriber::fmt::time::LocalTime::new(time_fmt);
+    let time_offset =
+        time::UtcOffset::current_local_offset().unwrap_or_else(|_| time::UtcOffset::UTC);
+    let timer = tracing_subscriber::fmt::time::OffsetTime::new(time_offset, time_fmt);
+
+    tracing_subscriber::fmt::fmt().with_timer(timer).init();
+
+    let params = cli::Cli::parse();
+    match params.commands {
+        Subcommands::SupervisedTrainData(train_data_param) => {
+            train_data_main(&train_data_param);
+        },
+
+        Subcommands::SupervisedTraining(training_param) => {
+            train_model_entrance(&training_param);
+        }
+    }
+
 }

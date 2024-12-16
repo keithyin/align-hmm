@@ -2,20 +2,20 @@ use std::{collections::{HashMap, HashSet}, fs, io::BufReader, process};
 
 use anyhow::anyhow;
 use clap::ArgMatches;
+use gskits::{file_reader::{bed_reader::BedInfo, vcf_reader::VcfInfo}, pbar::{get_spin_pb, DEFAULT_INTERVAL}};
 use rust_htslib::bam::{self, ext::BamRecordExtensions, Read};
 
-use crate::{file_reader::{bed_reader::BedInfo, vcf_reader::VcfInfo}, pb_tools::{get_spin_pb, DEFAULT_INTERVAL}};
+use crate::cli::SupervisedTrainDataParams;
 
+pub fn train_data_main(params: &SupervisedTrainDataParams) -> Option<()> {
 
-pub fn train_data_main(arg_matches: &ArgMatches) -> Option<()> {
-
-    let subreads_bam = arg_matches.get_one::<String>("subreads_bam").unwrap();
-    let ref_fa = arg_matches.get_one::<String>("ref_fasta").unwrap();
+    let subreads_bam = &params.sbr_bam;
+    let ref_fa = &params.ref_fa;
 
     // variant
-    let vcf_file = arg_matches.get_one::<String>("vcf_file").and_then(|v| Some(v.as_str()));
+    let vcf_file = params.vcf_file.as_ref().and_then(|v| Some(v.as_str()));
     // confidence region
-    let bed_file = arg_matches.get_one::<String>("bed_file").and_then(|v| Some(v.as_str()));
+    let bed_file = params.bed_file.as_ref().and_then(|v| Some(v.as_str()));
 
     // 1. do alignment
     let align_res_bam = alignment(subreads_bam, ref_fa, None).unwrap();
@@ -35,30 +35,17 @@ pub fn train_data_main(arg_matches: &ArgMatches) -> Option<()> {
 #[tracing::instrument(skip(subreads_bam, ref_fa, threads))]
 fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow::Result<String>{
     tracing::info!("do alignment");
-    let threads = threads.unwrap_or(num_cpus::get() / 2);
+    let threads = threads.unwrap_or(num_cpus::get());
     let o_file_prefix = format!("{}.align4arrow", subreads_bam.rsplit_once(".").unwrap().0);
     let o_filepath = format!("{o_file_prefix}.bam");
-    let mut cmd = process::Command::new("gsmm2-rs");
+    let mut cmd = process::Command::new("gsmm2");
     cmd.args([
+        "--threads", threads.to_string().as_str(),
+        "align",
         "-q", subreads_bam,
         "-r", ref_fa,
         "-p", o_file_prefix.as_str(),
-
-        "--aligner",  "minimap2",
-
-        "-t", threads.to_string().as_str(),
-        "--force_index",
-        // "--num_querys_per_fa", "4000000",
-        
-        "--kmer", "12",
-        "--wins", "8",
-
-        "--s_m", "2",
-        "--s_mm", "4",
-        "--s_go", "4,24",
-        "--s_ge", "2,1",
-        "--force_alignment", 
-        "--no_extra_info",
+        "--noMar"
     ]);
     
     let status = cmd.status()?;
