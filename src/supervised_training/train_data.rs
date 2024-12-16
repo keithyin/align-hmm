@@ -38,14 +38,27 @@ fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow
     let threads = threads.unwrap_or(num_cpus::get());
     let o_file_prefix = format!("{}.align4arrow", subreads_bam.rsplit_once(".").unwrap().0);
     let o_filepath = format!("{o_file_prefix}.bam");
-    let mut cmd = process::Command::new("gsmm2");
+    let mut cmd = process::Command::new("gsmm2-rs");
     cmd.args([
-        "--threads", threads.to_string().as_str(),
-        "align",
         "-q", subreads_bam,
         "-r", ref_fa,
         "-p", o_file_prefix.as_str(),
-        "--noMar"
+
+        "--aligner",  "minimap2",
+
+        "-t", threads.to_string().as_str(),
+        "--force_index",
+        // "--num_querys_per_fa", "4000000",
+        
+        "--kmer", "12",
+        "--wins", "8",
+
+        "--s_m", "2",
+        "--s_mm", "4",
+        "--s_go", "4,24",
+        "--s_ge", "2,1",
+        "--force_alignment", 
+        "--no_extra_info",
     ]);
     
     let status = cmd.status()?;
