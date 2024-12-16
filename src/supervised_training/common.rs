@@ -1,15 +1,34 @@
 use std::collections::HashMap;
 
-use crate::{bam_ext::BamRecordExt, utils};
-use bio::alignment::AlignmentOperation;
-use gskits::{dna::reverse_complement, ds::ReadInfo};
+use gskits::{dna::reverse_complement, ds::ReadInfo, gsbam::bam_record_ext::BamRecordExt};
 use mm2::{
     align_single_query_to_targets, build_aligner,
     params::{AlignParams, OupParams},
 };
 use rust_htslib::bam::{self, ext::BamRecordExtensions, Record};
+use lazy_static::lazy_static;
 
-#[derive(Clone, Copy, PartialEq)]
+lazy_static! {
+    pub static ref BASE_MAP: HashMap<u8, usize> = {
+        let mut map = HashMap::new();
+        map.insert('A' as u8, 0);
+        map.insert('C' as u8, 1);
+        map.insert('G' as u8, 2);
+        map.insert('T' as u8, 3);
+        map
+    };
+
+    pub static ref IDX_BASE_MAP: HashMap<u8, u8> = {
+        let mut map = HashMap::new();
+        map.insert(0, 'A' as u8);
+        map.insert(1, 'C' as u8);
+        map.insert(2, 'G' as u8);
+        map.insert(3, 'T' as u8);
+        map
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArrowState {
     Match = 0,
     Branch = 1, // homo insertion
@@ -18,8 +37,8 @@ pub enum ArrowState {
 }
 
 pub fn encode_ctx(pre_base: u8, cur_base: u8) -> usize {
-    ((*utils::dna::BASE_MAP.get(&pre_base).unwrap()) << 2)
-        + *(utils::dna::BASE_MAP.get(&cur_base).unwrap())
+    (gskits::dna::SEQ_NT4_TABLE[pre_base as usize]
+        << 2 + gskits::dna::SEQ_NT4_TABLE[cur_base as usize]) as usize
 }
 
 pub fn pin_start_end(aligned_record: &bam::Record) -> Vec<[Option<i64>; 2]> {
@@ -106,136 +125,6 @@ impl SubreadRecord {
 
     pub fn get_seq_range(&self, start: usize, end: usize) -> &[u8] {
         &self.seq.as_bytes()[start..end]
-    }
-}
-
-pub fn left_align_indel_v1(
-    query_seq: &[u8],
-    ref_seq: &[u8],
-    align_ops: &mut Vec<AlignmentOperation>,
-) {
-    for _ in 0..align_ops.len() {
-        let mut ref_cursor: i32 = -1;
-        let mut query_cursor: i32 = -1;
-
-        let mut moved_this_round = false;
-        for align_idx in 0..(align_ops.len() - 1) {
-            let op = align_ops[align_idx];
-            match op {
-                AlignmentOperation::Match | AlignmentOperation::Subst => {
-                    ref_cursor += 1;
-                    query_cursor += 1;
-                }
-
-                AlignmentOperation::Del => ref_cursor += 1,
-                AlignmentOperation::Ins => query_cursor += 1,
-                _ => panic!(""),
-            };
-
-            if op == AlignmentOperation::Match || op == AlignmentOperation::Subst {
-                continue;
-            }
-            let next_op = align_ops[align_idx + 1];
-            if next_op == AlignmentOperation::Ins || next_op == AlignmentOperation::Del {
-                continue;
-            }
-
-            if op == AlignmentOperation::Ins {
-                if (query_cursor as usize + 2) >= query_seq.len() {
-                    break;
-                }
-                if query_seq[query_cursor as usize] == query_seq[query_cursor as usize + 1]
-                    && query_seq[query_cursor as usize] == query_seq[query_cursor as usize + 2]
-                {
-                    align_ops[align_idx as usize] = align_ops[align_idx as usize + 1];
-                    align_ops[align_idx as usize + 1] = op;
-                    moved_this_round = true;
-                    ref_cursor += 1;
-                }
-                continue;
-            }
-
-            if op == AlignmentOperation::Del {
-                if (ref_cursor as usize + 1) >= ref_seq.len() {
-                    break;
-                }
-                if ref_seq[ref_cursor as usize] == ref_seq[ref_cursor as usize + 1] {
-                    align_ops[align_idx as usize] = align_ops[align_idx as usize + 1];
-                    align_ops[align_idx as usize + 1] = op;
-                    moved_this_round = true;
-                    query_cursor += 1;
-                }
-                continue;
-            }
-        }
-
-        if !moved_this_round {
-            break;
-        }
-    }
-}
-
-pub fn left_align_indel_v2(
-    query_seq: &[u8],
-    ref_seq: &[u8],
-    align_ops: &mut Vec<AlignmentOperation>,
-) {
-    for _ in 0..align_ops.len() {
-        let mut ref_cursor: i32 = -1;
-        let mut query_cursor: i32 = -1;
-
-        let mut moved_this_round = false;
-        for align_idx in 0..(align_ops.len() - 2) {
-            let op = align_ops[align_idx];
-            match op {
-                AlignmentOperation::Match | AlignmentOperation::Subst => {
-                    ref_cursor += 1;
-                    query_cursor += 1;
-                }
-
-                AlignmentOperation::Del => ref_cursor += 1,
-                AlignmentOperation::Ins => query_cursor += 1,
-                _ => panic!(""),
-            };
-
-            if op == AlignmentOperation::Match || op == AlignmentOperation::Subst {
-                continue;
-            }
-            let next_op = align_ops[align_idx + 1];
-            if next_op == AlignmentOperation::Ins || next_op == AlignmentOperation::Del {
-                continue;
-            }
-
-            if op == AlignmentOperation::Ins {
-                if (query_cursor as usize + 2) >= query_seq.len() {
-                    break;
-                }
-                if query_seq[query_cursor as usize] == query_seq[query_cursor as usize + 1] {
-                    align_ops[align_idx as usize] = align_ops[align_idx as usize + 1];
-                    align_ops[align_idx as usize + 1] = op;
-                    moved_this_round = true;
-                    ref_cursor += 1;
-                }
-                continue;
-            }
-
-            if op == AlignmentOperation::Del {
-                if (ref_cursor as usize + 1) >= ref_seq.len() {
-                    break;
-                }
-                if ref_seq[ref_cursor as usize] == ref_seq[ref_cursor as usize + 1] {
-                    align_ops[align_idx as usize] = align_ops[align_idx as usize + 1];
-                    align_ops[align_idx as usize + 1] = op;
-                    moved_this_round = true;
-                    query_cursor += 1;
-                }
-                continue;
-            }
-        }
-
-        if !moved_this_round {
-            break;
-        }
     }
 }
 
@@ -449,10 +338,11 @@ pub fn change_direction(
     (records, ref_sub_seq, dw)
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Emit {
-    ctx: u8,
-    state: ArrowState,
-    emit_base_enc: u8,
+    pub ctx: u8,
+    pub state: ArrowState,
+    pub emit_base_enc: u8,
 }
 
 impl Emit {
@@ -473,9 +363,10 @@ impl Emit {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct CtxState {
-    ctx: u8,
-    state: ArrowState,
+    pub ctx: u8,
+    pub state: ArrowState,
 }
 
 impl CtxState {
@@ -485,6 +376,7 @@ impl CtxState {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum TrainEvent {
     EmitEvent(Emit),
     CtxStateEvent(CtxState),
