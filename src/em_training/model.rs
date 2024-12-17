@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Axis};
 
 pub fn encode_2_bases(prev: u8, cur: u8) -> u8 {
     let mut enc = gskits::dna::SEQ_NT4_TABLE[prev as usize];
@@ -78,6 +78,15 @@ impl Template {
 
         Self(template)
     }
+
+    pub fn init_ctx(&self) -> u8 {
+        encode_2_bases('A' as u8, self.0[0].base)
+    }
+
+    pub fn ctx(&self, pos: usize) -> u8 {
+        assert!(pos < self.0.len());
+        encode_2_bases(self.0[pos].base, self.0[pos + 1].base)
+    }
 }
 
 impl Deref for Template {
@@ -89,8 +98,8 @@ impl Deref for Template {
 
 #[derive(Debug)]
 pub struct HmmModel {
-    ctx_move_prob: Array2<f32>,
-    move_ctx_emit_prob: Array3<f32>,
+    ctx_move_prob: Array2<f32>,      // 16 * 4
+    move_ctx_emit_prob: Array3<f32>, // 4 * 16 * 12 ?
 }
 
 impl HmmModel {
@@ -118,6 +127,71 @@ impl HmmModel {
 
     pub fn ctx_move(&self, ctx: u8, movement: Move) -> f32 {
         self.ctx_move_prob[[ctx as usize, movement as usize]]
+    }
+}
+
+impl From<&HmmBuilder> for HmmModel {
+    fn from(value: &HmmBuilder) -> Self {
+        let ctx_prob = value.ctx_move_prob_numerator.sum_axis(Axis(1));
+        let ctx_move_prob = Array2::from_shape_fn((16, 4), |(ctx, state)| {
+            value.ctx_move_prob_numerator[[ctx, state]] / ctx_prob[ctx]
+        });
+
+        let move_ctx_prob = value.move_ctx_emit_prob_numerator.sum_axis(Axis(2));
+        let move_ctx_emit_prob = Array3::from_shape_fn((4, 16, 12), |(state, ctx, emit)| {
+            value.move_ctx_emit_prob_numerator[[state, ctx, emit]] / move_ctx_prob[[state, ctx]]
+        });
+
+        Self {
+            ctx_move_prob,
+            move_ctx_emit_prob,
+        }
+    }
+}
+
+pub struct HmmBuilder {
+    ctx_move_prob_numerator: Array2<f32>,      // 16 * 4
+    move_ctx_emit_prob_numerator: Array3<f32>, // 4 * 16 * 12 ?
+}
+
+impl HmmBuilder {
+    pub fn new() -> Self {
+        Self {
+            ctx_move_prob_numerator: Array2::zeros((16, 4)),
+            move_ctx_emit_prob_numerator: Array3::zeros((4, 16, 12)),
+        }
+    }
+
+    pub fn add_to_ctx_move_prob_numerator(&mut self, ctx: u8, movement: Move, prob: f32) {
+        self.ctx_move_prob_numerator[[ctx as usize, movement as usize]] += prob;
+    }
+
+    pub fn add_to_move_ctx_emit_prob_numerator(
+        &mut self,
+        ctx: u8,
+        movement: Move,
+        emit: u8,
+        prob: f32,
+    ) {
+        self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] += prob;
+    }
+
+    pub fn merge(&mut self, other: &HmmBuilder) {
+        for ctx in 0..16 {
+            for state in 0..4 {
+                self.ctx_move_prob_numerator[[ctx, state]] +=
+                    other.ctx_move_prob_numerator[[ctx, state]];
+            }
+        }
+
+        for state in 0..4 {
+            for ctx in 0..16 {
+                for emit in 0..12 {
+                    self.move_ctx_emit_prob_numerator[[state, ctx, emit]] +=
+                        other.move_ctx_emit_prob_numerator[[state, ctx, emit]];
+                }
+            }
+        }
     }
 }
 

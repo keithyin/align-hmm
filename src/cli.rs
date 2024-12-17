@@ -35,38 +35,44 @@ impl Cli {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum Subcommands {
-    SupervisedTraining(SupervisedTrainingParams),
-    SupervisedTrainData(SupervisedTrainDataParams)
+    SupervisedTraining(TrainingParams),
+    EmTraining(TrainingParams),
+    SupervisedTrainData(SupervisedTrainDataParams),
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct SupervisedTrainingParams {
+pub struct TrainingParams {
     #[arg(long = "aligned-bams")]
     pub aligned_bams: Vec<String>,
 
-    #[arg(long = "ref-fas", help="fasta")]
+    #[arg(long = "ref-fas", help = "fasta")]
     pub ref_fas: Vec<String>,
 
-    #[arg(long="dw_boundaries", default_value_t=String::from_str("18.46").unwrap()   )]
-    pub dw_boundaries: String
-
-
+    #[arg(long="dw_boundaries", default_value_t=String::from_str("18,46").unwrap()   )]
+    pub dw_boundaries: String,
 }
+
+impl TrainingParams {
+    pub fn parse_dw_boundaries(&self) -> Vec<u8> {
+        self.dw_boundaries
+            .split(",")
+            .map(|v| v.trim())
+            .map(|v| v.parse::<u8>().unwrap())
+            .collect::<Vec<u8>>()
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 pub struct SupervisedTrainDataParams {
     #[arg(long = "sbr-bam")]
     pub sbr_bam: String,
 
-    #[arg(long="ref-fa")]
+    #[arg(long = "ref-fa")]
     pub ref_fa: String,
 
-    #[arg(long="vcf-file")]
+    #[arg(long = "vcf-file")]
     pub vcf_file: Option<String>,
 
-    #[arg(long="bed-file")]
+    #[arg(long = "bed-file")]
     pub bed_file: Option<String>,
-
-
-
-
 }

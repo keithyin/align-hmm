@@ -17,6 +17,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "crossbeam",
  "gskits",
  "lazy_static",
  "mm2",

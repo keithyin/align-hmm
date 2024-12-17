@@ -39,7 +39,7 @@ pub enum ArrowState {
 pub struct TrainInstance {
     ref_aligned_seq: String,
     read_aligned_seq: String,
-    dw: Vec<Option<u8>>,
+    dw_buckets: Vec<Option<u8>>, // base 的 dw 在哪个桶里
 }
 
 impl TrainInstance {
@@ -77,7 +77,7 @@ impl TrainInstance {
     }
 
     pub fn dw(&self) -> &Vec<Option<u8>> {
-        &self.dw
+        &self.dw_buckets
     }
 
     pub fn ref_cur_pos2next_ref(&self) -> HashMap<usize, usize> {
@@ -171,12 +171,12 @@ impl TrainInstance {
         Self {
             ref_aligned_seq: ref_aligned_seq,
             read_aligned_seq: read_aligned_seq,
-            dw: dw_features,
+            dw_buckets: dw_features,
         }
     }
 
     fn pin_start_end(self) -> Self {
-        let align_span_len = self.dw.len();
+        let align_span_len = self.dw_buckets.len();
 
         let read_seq_bytes = self.read_aligned_seq.as_bytes();
         let ref_seq_bytes = self.ref_aligned_seq.as_bytes();
@@ -197,7 +197,7 @@ impl TrainInstance {
         Self {
             ref_aligned_seq: self.ref_aligned_seq[start_idx..end_idx].to_string(),
             read_aligned_seq: self.read_aligned_seq[start_idx..end_idx].to_string(),
-            dw: self.dw[start_idx..end_idx].to_vec(),
+            dw_buckets: self.dw_buckets[start_idx..end_idx].to_vec(),
         }
     }
 }

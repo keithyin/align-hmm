@@ -20,7 +20,7 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
     dp_matrix[[0, 0]] = 1.0;
 
     let mut prev_trans_probs = TemplatePos::default();
-    let prev_tpl_base = prev_trans_probs.base();
+    let mut prev_tpl_base = prev_trans_probs.base();
 
     for col in 1..(dp_cols - 1) {
         let cur_trans_probs = template[col - 1];
@@ -72,6 +72,7 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
         }
 
         prev_trans_probs = cur_trans_probs;
+        prev_tpl_base = prev_trans_probs.base();
     }
 
     let cur_tpl_base = template.last().unwrap().base();

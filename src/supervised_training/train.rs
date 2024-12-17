@@ -4,16 +4,15 @@ use std::{
     io::{BufWriter, Write},
 };
 
-use clap::ArgMatches;
-use gskits::{fastx_reader::{fasta_reader::FastaFileReader, read_fastx}, pbar::{get_spin_pb, DEFAULT_INTERVAL}};
-use rust_htslib::{
-    bam::{self, ext::BamRecordExtensions, Read},
-    faidx,
+use gskits::{
+    fastx_reader::{fasta_reader::FastaFileReader, read_fastx},
+    pbar::{get_spin_pb, DEFAULT_INTERVAL},
 };
+use rust_htslib::bam::{self, Read};
 
 use ndarray::{s, Array2, Array3, Axis};
 
-use crate::cli::SupervisedTrainingParams;
+use crate::cli::TrainingParams;
 
 use super::common::{build_train_events, TrainEvent, TrainInstance, IDX_BASE_MAP};
 
@@ -28,7 +27,6 @@ struct ArrowHmm {
 
     ctx_trans_prob: Array2<f32>,
     emission_prob: Array3<f32>,
-
 }
 
 impl ArrowHmm {
@@ -150,9 +148,17 @@ impl ArrowHmm {
     }
 }
 
-fn train_model(aligned_bam: &str, ref_fasta: &str, arrow_hmm: &mut ArrowHmm, dw_boundaries: &Vec<u8>) -> anyhow::Result<()> {
+fn train_model(
+    aligned_bam: &str,
+    ref_fasta: &str,
+    arrow_hmm: &mut ArrowHmm,
+    dw_boundaries: &Vec<u8>,
+) -> anyhow::Result<()> {
     let fasta_rader = FastaFileReader::new(ref_fasta.to_string());
-    let refname2refseq = read_fastx(fasta_rader).into_iter().map(|read_info| (read_info.name, read_info.seq)).collect::<HashMap<_, _>>();
+    let refname2refseq = read_fastx(fasta_rader)
+        .into_iter()
+        .map(|read_info| (read_info.name, read_info.seq))
+        .collect::<HashMap<_, _>>();
 
     let mut aligned_bam_reader = bam::Reader::from_path(aligned_bam).unwrap();
     aligned_bam_reader.set_threads(10).unwrap();
@@ -179,7 +185,11 @@ fn train_model(aligned_bam: &str, ref_fasta: &str, arrow_hmm: &mut ArrowHmm, dw_
         let refname = tid2refname.get(&tid).unwrap();
         let refseq = refname2refseq.get(refname).unwrap();
 
-        let train_instance = TrainInstance::from_aligned_record_and_ref_seq_and_pin_start_end(&align_record, refseq, dw_boundaries);
+        let train_instance = TrainInstance::from_aligned_record_and_ref_seq_and_pin_start_end(
+            &align_record,
+            refseq,
+            dw_boundaries,
+        );
         arrow_hmm.update(&build_train_events(&train_instance));
     }
     pbar.finish();
@@ -187,9 +197,7 @@ fn train_model(aligned_bam: &str, ref_fasta: &str, arrow_hmm: &mut ArrowHmm, dw_
     Ok(())
 }
 
-
-
-pub fn train_model_entrance(params: &SupervisedTrainingParams) -> Option<()> {
+pub fn train_model_entrance(params: &TrainingParams) -> Option<()> {
     let aligned_bams = &params.aligned_bams;
     let ref_fastas = &params.ref_fas;
     let dw_boundaries = &params.dw_boundaries;
@@ -203,7 +211,13 @@ pub fn train_model_entrance(params: &SupervisedTrainingParams) -> Option<()> {
     let mut arrow_hmm = ArrowHmm::new();
 
     for idx in 0..aligned_bams.len() {
-        train_model(&aligned_bams[idx], &ref_fastas[idx], &mut arrow_hmm , &dw_buckets).unwrap();
+        train_model(
+            &aligned_bams[idx],
+            &ref_fastas[idx],
+            &mut arrow_hmm,
+            &dw_buckets,
+        )
+        .unwrap();
     }
     arrow_hmm.finish();
     arrow_hmm.print_params();
