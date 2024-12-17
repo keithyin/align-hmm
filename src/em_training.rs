@@ -33,15 +33,13 @@ pub fn em_training(params: &TrainingParams) {
             handles.push(s.spawn(move || train(train_ins_receiver_, hmm_model)));
         }
         drop(train_ins_receiver);
-        
+
         let mut final_hmm_builder = HmmBuilder::new();
         handles.into_iter().for_each(|h| {
             final_hmm_builder.merge(&h.join().unwrap());
         });
 
         let new_hmm_model: HmmModel = (&final_hmm_builder).into();
-        
-
     });
 }
 
@@ -153,6 +151,16 @@ pub fn train(
             prev_trans_probs = cur_trans_prob;
             prev_tpl_base = cur_tpl_base;
         }
+
+        let (tot_row, tot_col) = (alpha_dp.shape()[0], alpha_dp.shape()[1]);
+        let cur_tpl_base = tpl.last().unwrap().base();
+        let cur_base_enc = *encoded_emit.last().unwrap();
+        hmm_builder.add_to_move_ctx_emit_prob_numerator(
+            encode_2_bases(prev_tpl_base, cur_tpl_base),
+            model::Move::Match,
+            cur_base_enc,
+            alpha_dp[[tot_row - 2, tot_col - 2]] * beta_dp[[tot_row - 1, tot_col - 1]],
+        );
     }
 
     hmm_builder
