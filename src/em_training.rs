@@ -16,31 +16,41 @@ pub fn em_training(params: &TrainingParams) {
 
     let mut hmm_model = HmmModel::new(12);
 
-    thread::scope(|s| {
-        let aligned_bams = &params.aligned_bams;
-        let ref_fastas = &params.ref_fas;
-        let dw_boundaries = &dw_boundaries;
-        let hmm_model = &hmm_model;
+    for epoch in 0..1000 {
+        let new_hmm_model: HmmModel = thread::scope(|s| {
+            let aligned_bams = &params.aligned_bams;
+            let ref_fastas = &params.ref_fas;
+            let dw_boundaries = &dw_boundaries;
+            let hmm_model_ref = &hmm_model;
 
-        let (train_ins_sender, train_ins_receiver) = channel::bounded(1000);
-        s.spawn(move || {
-            issue_all_train_instance(aligned_bams, ref_fastas, dw_boundaries, train_ins_sender);
+            let (train_ins_sender, train_ins_receiver) = channel::bounded(1000);
+            s.spawn(move || {
+                issue_all_train_instance(aligned_bams, ref_fastas, dw_boundaries, train_ins_sender);
+            });
+
+            let mut handles = vec![];
+            for _ in 0..(num_cpus::get() - 4) {
+                let train_ins_receiver_ = train_ins_receiver.clone();
+                handles.push(s.spawn(move || train(train_ins_receiver_, hmm_model_ref)));
+            }
+            drop(train_ins_receiver);
+
+            let mut final_hmm_builder = HmmBuilder::new();
+            handles.into_iter().for_each(|h| {
+                final_hmm_builder.merge(&h.join().unwrap());
+            });
+
+            (&final_hmm_builder).into()
         });
-
-        let mut handles = vec![];
-        for _ in 0..(num_cpus::get() - 4) {
-            let train_ins_receiver_ = train_ins_receiver.clone();
-            handles.push(s.spawn(move || train(train_ins_receiver_, hmm_model)));
+        let delta = hmm_model.delta(&new_hmm_model);
+        if delta < 1e-6 {
+            println!("DONE!!!!");
+            break;
+        } else {
+            println!("epoch:{}, delta:{}", epoch, delta);
         }
-        drop(train_ins_receiver);
-
-        let mut final_hmm_builder = HmmBuilder::new();
-        handles.into_iter().for_each(|h| {
-            final_hmm_builder.merge(&h.join().unwrap());
-        });
-
-        let new_hmm_model: HmmModel = (&final_hmm_builder).into();
-    });
+        hmm_model = new_hmm_model;
+    }
 }
 
 pub fn train(

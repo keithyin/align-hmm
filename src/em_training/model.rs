@@ -128,6 +128,14 @@ impl HmmModel {
     pub fn ctx_move(&self, ctx: u8, movement: Move) -> f32 {
         self.ctx_move_prob[[ctx as usize, movement as usize]]
     }
+
+    pub fn delta(&self, other: &HmmModel) -> f32{
+        let emit_prob_delta = (self.move_ctx_emit_prob.clone() - other.move_ctx_emit_prob.clone()).abs().mean().unwrap();
+        let trans_delta = (self.ctx_move_prob.clone() - other.ctx_move_prob.clone()).abs().mean().unwrap();
+        emit_prob_delta + trans_delta
+
+    }
+
 }
 
 impl From<&HmmBuilder> for HmmModel {
