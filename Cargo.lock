@@ -16,9 +16,11 @@ name = "align-hmm"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "bio 2.0.3",
  "clap",
  "crossbeam",
  "gskits",
+ "indicatif",
  "lazy_static",
  "mm2",
  "ndarray 0.16.1",

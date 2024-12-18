@@ -1,56 +1,91 @@
-use std::thread;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use crate::{
     cli::TrainingParams,
-    supervised_training::common::TrainInstance,
-    train_instance::{encode_emit, issue_all_train_instance},
+    common::{TrainInstance, TransState},
+    hmm_model::{HmmBuilder, HmmModel},
+    train_instance::{encode_emit, issue_align_record, train_instance_worker},
 };
 use crossbeam::channel;
 use fb::{backward, forward};
-use model::{encode_2_bases, HmmBuilder, HmmModel, Template, TemplatePos};
+use gskits::pbar::{get_spin_pb, DEFAULT_INTERVAL};
+use model::{encode_2_bases, Template, TemplatePos};
 pub mod fb;
 pub mod model;
 
-pub fn em_training(params: &TrainingParams) {
-    let dw_boundaries = params.parse_dw_boundaries();
-
-    let mut hmm_model = HmmModel::new(12);
+pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
+    let aligned_bams = &params.aligned_bams;
+    let ref_fastas = &params.ref_fas;
+    let dw_boundaries = &params.parse_dw_boundaries();
+    assert!(aligned_bams.len() == ref_fastas.len());
 
     for epoch in 0..1000 {
+        let pbar = get_spin_pb(format!("epoch:{} --> em training...", epoch), DEFAULT_INTERVAL);
+
+        let pbar = Arc::new(Mutex::new(pbar));
         let new_hmm_model: HmmModel = thread::scope(|s| {
             let aligned_bams = &params.aligned_bams;
             let ref_fastas = &params.ref_fas;
             let dw_boundaries = &dw_boundaries;
             let hmm_model_ref = &hmm_model;
 
+            let (record_sender, record_receiver) = channel::bounded(1000);
+            aligned_bams
+                .iter()
+                .zip(ref_fastas.iter())
+                .for_each(|(aligned_bam, ref_fasta)| {
+                    let record_sender_ = record_sender.clone();
+                    let pbar_ = pbar.clone();
+                    s.spawn(move || {
+                        issue_align_record(aligned_bam, ref_fasta, pbar_, record_sender_);
+                    });
+                });
+            drop(record_sender);
+            drop(pbar);
+
             let (train_ins_sender, train_ins_receiver) = channel::bounded(1000);
-            s.spawn(move || {
-                issue_all_train_instance(aligned_bams, ref_fastas, dw_boundaries, train_ins_sender);
-            });
+            for _ in 0..(num_cpus::get() / 4) {
+                let record_receiver_ = record_receiver.clone();
+                let train_ins_sender_ = train_ins_sender.clone();
+                s.spawn(move || {
+                    train_instance_worker(dw_boundaries, record_receiver_, train_ins_sender_)
+                });
+            }
+            drop(record_receiver);
+            drop(train_ins_sender);
 
             let mut handles = vec![];
-            for _ in 0..(num_cpus::get() - 4) {
+            for _ in 0..(num_cpus::get() / 4 * 3) {
                 let train_ins_receiver_ = train_ins_receiver.clone();
                 handles.push(s.spawn(move || train(train_ins_receiver_, hmm_model_ref)));
             }
             drop(train_ins_receiver);
 
             let mut final_hmm_builder = HmmBuilder::new();
+            
             handles.into_iter().for_each(|h| {
-                final_hmm_builder.merge(&h.join().unwrap());
+                let hb = h.join().unwrap();
+                final_hmm_builder.merge(&hb);
             });
-
             (&final_hmm_builder).into()
         });
+
+        tracing::info!("compute delta");
         let delta = hmm_model.delta(&new_hmm_model);
         if delta < 1e-6 {
+            new_hmm_model.dump_to_file(&format!("arrow_hg002.em-epoch-{}.params", epoch));
             println!("DONE!!!!");
             break;
         } else {
             println!("epoch:{}, delta:{}", epoch, delta);
+            new_hmm_model.dump_to_file(&format!("arrow_hg002.em-epoch-{}.params", epoch));
         }
         hmm_model = new_hmm_model;
     }
+
 }
 
 pub fn train(
@@ -69,10 +104,14 @@ pub fn train(
             .map(|v| v.unwrap())
             .collect::<Vec<u8>>();
 
+        assert_eq!(qseq.len(), dwell_time.len());
+
         let tpl = Template::from_template_bases(rseq.as_bytes(), hmm_model);
         let encoded_emit = encode_emit(&dwell_time, &qseq);
         let alpha_dp = forward(&encoded_emit, &tpl, hmm_model);
         let beta_dp = backward(&encoded_emit, &tpl, hmm_model);
+
+        assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
         let mut prev_trans_probs = TemplatePos::default();
         let mut prev_tpl_base = prev_trans_probs.base();
@@ -88,10 +127,10 @@ pub fn train(
                     // match, update emission
                     hmm_builder.add_to_move_ctx_emit_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
-                        model::Move::Match,
+                        TransState::Match,
                         cur_read_base_enc,
                         alpha_dp[[row - 1, col - 1]]
-                            * prev_trans_probs.prob(model::Move::Match)
+                            * prev_trans_probs.prob(TransState::Match)
                             * beta_dp[[row, col]],
                     );
                 }
@@ -100,9 +139,9 @@ pub fn train(
                     // match, update state
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
-                        model::Move::Match,
+                        TransState::Match,
                         alpha_dp[[row - 1, col - 1]]
-                            * prev_trans_probs.prob(model::Move::Match)
+                            * prev_trans_probs.prob(TransState::Match)
                             * beta_dp[[row, col]],
                     );
                 }
@@ -114,35 +153,35 @@ pub fn train(
 
                     hmm_builder.add_to_move_ctx_emit_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
-                        model::Move::Branch,
+                        TransState::Branch,
                         cur_read_base_enc,
                         alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(model::Move::Branch)
+                            * prev_trans_probs.prob(TransState::Branch)
                             * beta_dp[[row, col]],
                     );
 
                     hmm_builder.add_to_move_ctx_emit_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
-                        model::Move::Stick,
+                        TransState::Stick,
                         cur_read_base_enc,
                         alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(model::Move::Stick)
+                            * prev_trans_probs.prob(TransState::Stick)
                             * beta_dp[[row, col]],
                     );
 
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
-                        model::Move::Branch,
+                        TransState::Branch,
                         alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(model::Move::Branch)
+                            * prev_trans_probs.prob(TransState::Branch)
                             * beta_dp[[row, col]],
                     );
 
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
-                        model::Move::Stick,
+                        TransState::Stick,
                         alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(model::Move::Stick)
+                            * prev_trans_probs.prob(TransState::Stick)
                             * beta_dp[[row, col]],
                     );
                 }
@@ -150,9 +189,9 @@ pub fn train(
                 if col > 1 {
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
-                        model::Move::Dark,
+                        TransState::Dark,
                         alpha_dp[[row, col - 1]]
-                            * prev_trans_probs.prob(model::Move::Dark)
+                            * prev_trans_probs.prob(TransState::Dark)
                             * beta_dp[[row, col]],
                     );
                 }
@@ -167,7 +206,7 @@ pub fn train(
         let cur_base_enc = *encoded_emit.last().unwrap();
         hmm_builder.add_to_move_ctx_emit_prob_numerator(
             encode_2_bases(prev_tpl_base, cur_tpl_base),
-            model::Move::Match,
+            TransState::Match,
             cur_base_enc,
             alpha_dp[[tot_row - 2, tot_col - 2]] * beta_dp[[tot_row - 1, tot_col - 1]],
         );

@@ -1,157 +1,29 @@
 use core::str;
 use std::{
     collections::HashMap,
-    io::{BufWriter, Write},
+    sync::{Arc, Mutex},
+    thread,
 };
 
+use crossbeam::channel;
 use gskits::{
     fastx_reader::{fasta_reader::FastaFileReader, read_fastx},
     pbar::{get_spin_pb, DEFAULT_INTERVAL},
 };
 use rust_htslib::bam::{self, Read};
 
-use ndarray::{s, Array2, Array3, Axis};
+use crate::{
+    cli::TrainingParams,
+    hmm_model::HmmModel,
+    train_instance::{issue_align_record, train_instance_worker},
+};
 
-use crate::cli::TrainingParams;
-
-use super::common::{build_train_events, TrainEvent, TrainInstance, IDX_BASE_MAP};
-
-struct ArrowHmm {
-    num_state: usize,
-    num_emit_state: usize,
-    num_ctx: usize,
-    num_emit: usize,
-
-    ctx_trans_cnt: Array2<usize>,
-    emission_cnt: Array3<usize>,
-
-    ctx_trans_prob: Array2<f32>,
-    emission_prob: Array3<f32>,
-}
-
-impl ArrowHmm {
-    fn new() -> Self {
-        let num_state = 4_usize;
-        let num_emit_state = 3_usize;
-        let num_ctx = 16_usize;
-        let num_emit = 4 * 4 * 4;
-        ArrowHmm {
-            num_state,
-            num_emit_state,
-            num_ctx,
-            num_emit,
-            ctx_trans_cnt: Array2::<usize>::zeros((num_ctx, num_state)), // zeros: no laplace smooth, ones: laplace smooth
-            emission_cnt: Array3::<usize>::ones((num_emit_state, num_ctx, num_emit)),
-            ctx_trans_prob: Array2::<f32>::zeros((num_ctx, num_state)),
-            emission_prob: Array3::<f32>::zeros((num_emit_state, num_ctx, num_emit)),
-        }
-    }
-
-    fn update(&mut self, events: &Vec<TrainEvent>) {
-        events.iter().for_each(|&event| match event {
-            TrainEvent::EmitEvent(emit) => {
-                self.emission_cnt[[
-                    emit.state as usize,
-                    emit.ctx as usize,
-                    emit.emit_base_enc as usize,
-                ]] += 1;
-            }
-            TrainEvent::CtxStateEvent(ctx_state) => {
-                self.ctx_trans_cnt[[ctx_state.ctx as usize, ctx_state.state as usize]] += 1;
-            }
-        });
-    }
-
-    fn finish(&mut self) {
-        let ctx_aggr = self.ctx_trans_cnt.sum_axis(Axis(1));
-        let emission_aggr = self.emission_cnt.sum_axis(Axis(2));
-
-        for i in 0..self.num_ctx {
-            if ctx_aggr[[i]] == 0 {
-                continue;
-            }
-
-            for j in 0..self.num_state {
-                self.ctx_trans_prob[[i, j]] =
-                    (self.ctx_trans_cnt[[i, j]] as f32) / (ctx_aggr[[i]] as f32);
-            }
-        }
-
-        for i in 0..self.num_emit_state {
-            for j in 0..self.num_ctx {
-                if emission_aggr[[i, j]] == 0 {
-                    continue;
-                }
-                for k in 0..self.num_emit {
-                    self.emission_prob[[i, j, k]] =
-                        (self.emission_cnt[[i, j, k]] as f32) / (emission_aggr[[i, j]] as f32);
-                }
-            }
-        }
-    }
-
-    fn ctx_trans_prob_to_string(&self) -> String {
-        let mut param_strs = vec![];
-
-        for i in 0..self.num_ctx {
-            let second = IDX_BASE_MAP.get(&((i & 0b0011) as u8)).unwrap();
-            let first = IDX_BASE_MAP.get(&(((i >> 2) & 0b0011) as u8)).unwrap();
-            let ctx = String::from_iter(vec![(*first) as char, (*second) as char]);
-            let prob_str = format!(
-                "{{{}}}, // {}",
-                self.ctx_trans_prob
-                    .slice(s![i, ..])
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<String>>()
-                    .join(","),
-                ctx
-            );
-            param_strs.push(prob_str);
-        }
-
-        param_strs.join("\n")
-    }
-
-    fn emit_prob_to_string(&self) -> String {
-        let mut param_strs = vec![];
-
-        for state_idx in 0..self.num_emit_state {
-            let mut state_string = vec![];
-            for ctx_idx in 0..self.num_ctx {
-                let emit = self.emission_prob.slice(s![state_idx, ctx_idx, ..]);
-                let emit = emit
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<String>>()
-                    .join(",");
-
-                state_string.push(format!("{{{}}}", emit));
-            }
-            param_strs.push(format!("{{\n {} \n}}", state_string.join(",\n")));
-        }
-
-        param_strs.join(",\n")
-    }
-
-    pub fn print_params(&self) {
-        println!("{}", self.ctx_trans_prob_to_string());
-        println!("{}", self.emit_prob_to_string());
-    }
-
-    pub fn dump_to_file(&self, filename: &str) {
-        let file = std::fs::File::create(filename).unwrap();
-        let mut writer = BufWriter::new(file);
-        writeln!(&mut writer, "{}", self.ctx_trans_prob_to_string()).unwrap();
-        writeln!(&mut writer, "\n\n\n\n").unwrap();
-        writeln!(&mut writer, "{}", self.emit_prob_to_string()).unwrap();
-    }
-}
+use crate::common::{build_train_events, TrainInstance};
 
 fn train_model(
     aligned_bam: &str,
     ref_fasta: &str,
-    arrow_hmm: &mut ArrowHmm,
+    arrow_hmm: &mut HmmModel,
     dw_boundaries: &Vec<u8>,
 ) -> anyhow::Result<()> {
     let fasta_rader = FastaFileReader::new(ref_fasta.to_string());
@@ -190,13 +62,16 @@ fn train_model(
             refseq,
             dw_boundaries,
         );
-        arrow_hmm.update(&build_train_events(&train_instance));
+        if let Some(train_instance) = &train_instance {
+            arrow_hmm.update(&build_train_events(train_instance));
+        }
     }
     pbar.finish();
 
     Ok(())
 }
 
+#[allow(unused)]
 pub fn train_model_entrance(params: &TrainingParams) -> Option<()> {
     let aligned_bams = &params.aligned_bams;
     let ref_fastas = &params.ref_fas;
@@ -208,7 +83,7 @@ pub fn train_model_entrance(params: &TrainingParams) -> Option<()> {
         .map(|v| v.parse::<u8>().unwrap())
         .collect::<Vec<u8>>();
     assert!(aligned_bams.len() == ref_fastas.len());
-    let mut arrow_hmm = ArrowHmm::new();
+    let mut arrow_hmm = HmmModel::new();
 
     for idx in 0..aligned_bams.len() {
         train_model(
@@ -224,4 +99,73 @@ pub fn train_model_entrance(params: &TrainingParams) -> Option<()> {
     arrow_hmm.dump_to_file("arrow_hg002.params");
 
     Some(())
+}
+
+pub fn train_model_entrance_parallel(params: &TrainingParams) -> HmmModel{
+    let aligned_bams = &params.aligned_bams;
+    let ref_fastas = &params.ref_fas;
+    let dw_boundaries = &params.parse_dw_boundaries();
+    assert!(aligned_bams.len() == ref_fastas.len());
+
+    let pbar = get_spin_pb(format!("training..."), DEFAULT_INTERVAL);
+
+    let pbar = Arc::new(Mutex::new(pbar));
+
+    let final_hmm_model = thread::scope(|s| {
+        let (record_sender, record_receiver) = channel::bounded(1000);
+
+        aligned_bams
+            .iter()
+            .zip(ref_fastas.iter())
+            .for_each(|(aligned_bam, ref_fasta)| {
+                let record_sender_ = record_sender.clone();
+                let pbar_ = pbar.clone();
+                s.spawn(move || {
+                    issue_align_record(aligned_bam, ref_fasta, pbar_, record_sender_);
+                });
+            });
+        drop(record_sender);
+        drop(pbar);
+
+        let (train_ins_sender, train_ins_receiver) = channel::bounded(1000);
+        for _ in 0..(num_cpus::get() / 2) {
+            let record_receiver_ = record_receiver.clone();
+            let train_ins_sender_ = train_ins_sender.clone();
+            s.spawn(move || {
+                train_instance_worker(dw_boundaries, record_receiver_, train_ins_sender_)
+            });
+        }
+        drop(record_receiver);
+        drop(train_ins_sender);
+        let mut hmm_model_parts = vec![];
+        for _ in 0..(num_cpus::get() / 2) {
+            let train_ins_recv_ = train_ins_receiver.clone();
+            hmm_model_parts.push(s.spawn(move || update_hmm_model_worker(train_ins_recv_)));
+        }
+
+        let hmm_model_parts = hmm_model_parts
+            .into_iter()
+            .map(|hmm_model| hmm_model.join().unwrap())
+            .collect::<Vec<_>>();
+
+        let mut final_hmm_model = HmmModel::new();
+        hmm_model_parts
+            .into_iter()
+            .for_each(|part| final_hmm_model.cnt_merge(&part));
+        final_hmm_model.finish();
+        final_hmm_model.print_params();
+        final_hmm_model.dump_to_file("arrow_hg002.params");
+        final_hmm_model
+    });
+
+    final_hmm_model
+}
+
+fn update_hmm_model_worker(receiver: channel::Receiver<TrainInstance>) -> HmmModel {
+    let mut hmm = HmmModel::new();
+    for train_instance in receiver {
+        hmm.update(&build_train_events(&train_instance));
+    }
+
+    hmm
 }

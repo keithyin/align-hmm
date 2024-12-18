@@ -1,6 +1,10 @@
 use ndarray::Array2;
 
-use super::model::{encode_2_bases, HmmModel, Move, Template, TemplatePos};
+use crate::hmm_model::HmmModel;
+
+use super::model::{encode_2_bases, Template, TemplatePos};
+use crate::common::TransState;
+
 
 /// forward backward
 
@@ -30,9 +34,9 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
             let cur_read_base_enc = encoded_query[row - 1];
             if row > 0 && col > 0 {
                 score = dp_matrix[[row - 1, col - 1]]
-                    * prev_trans_probs.prob(Move::Match)
+                    * prev_trans_probs.prob(TransState::Match)
                     * hmm_model.emit_prob(
-                        Move::Match,
+                        TransState::Match,
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
                         cur_read_base_enc,
                     );
@@ -44,18 +48,18 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
                 let next_trans_probs = template[col];
                 let next_tpl_base = next_trans_probs.base();
                 let this_move_score = dp_matrix[[row - 1, col]]
-                    * cur_trans_probs.prob(Move::Branch)
+                    * cur_trans_probs.prob(TransState::Branch)
                     * hmm_model.emit_prob(
-                        Move::Branch,
+                        TransState::Branch,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         cur_read_base_enc,
                     );
 
                 score += this_move_score;
                 let this_move_score = dp_matrix[[row - 1, col]]
-                    * cur_trans_probs.prob(Move::Stick)
+                    * cur_trans_probs.prob(TransState::Stick)
                     * hmm_model.emit_prob(
-                        Move::Stick,
+                        TransState::Stick,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         cur_read_base_enc,
                     );
@@ -65,7 +69,7 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
 
             if col > 1 {
                 // dark here
-                score += dp_matrix[[row, col - 1]] * prev_trans_probs.prob(Move::Dark);
+                score += dp_matrix[[row, col - 1]] * prev_trans_probs.prob(TransState::Dark);
             }
 
             dp_matrix[[row, col]] = score;
@@ -78,7 +82,7 @@ pub fn forward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel) 
     let cur_tpl_base = template.last().unwrap().base();
     dp_matrix[[dp_rows - 1, dp_cols - 1]] = dp_matrix[[dp_rows - 2, dp_cols - 2]]
         * hmm_model.emit_prob(
-            Move::Match,
+            TransState::Match,
             encode_2_bases(prev_tpl_base, cur_tpl_base),
             *encoded_query.last().unwrap(),
         );
@@ -107,16 +111,16 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
             // match
             if (row + 1) == (dp_rows - 1) && (col + 1) == (dp_cols - 1) {
                 let this_move_score = hmm_model.emit_prob(
-                    Move::Match,
+                    TransState::Match,
                     encode_2_bases(cur_tpl_base, next_tpl_base),
                     next_read_base_enc,
                 ) * dp_matrix[[row + 1, col + 1]];
 
                 score += this_move_score;
             } else {
-                let this_move_score = cur_trans_probs.prob(Move::Match)
+                let this_move_score = cur_trans_probs.prob(TransState::Match)
                     * hmm_model.emit_prob(
-                        Move::Match,
+                        TransState::Match,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         next_read_base_enc,
                     )
@@ -127,18 +131,18 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
 
             if row < (dp_rows - 2) {
                 // ins here
-                let this_move_score = cur_trans_probs.prob(Move::Branch)
+                let this_move_score = cur_trans_probs.prob(TransState::Branch)
                     * hmm_model.emit_prob(
-                        Move::Branch,
+                        TransState::Branch,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         next_read_base_enc,
                     )
                     * dp_matrix[[row + 1, col]];
 
                 score += this_move_score;
-                let this_move_score = cur_trans_probs.prob(Move::Stick)
+                let this_move_score = cur_trans_probs.prob(TransState::Stick)
                     * hmm_model.emit_prob(
-                        Move::Stick,
+                        TransState::Stick,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         next_read_base_enc,
                     )
@@ -149,7 +153,7 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
 
             if col < (dp_cols - 2) {
                 // dark here
-                score += cur_trans_probs.prob(Move::Dark) * dp_matrix[[row, col + 1]];
+                score += cur_trans_probs.prob(TransState::Dark) * dp_matrix[[row, col + 1]];
             }
 
             dp_matrix[[row, col]] = score;
@@ -158,7 +162,7 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
     let default_tpl_pos = TemplatePos::default();
     let default_tpl_base = default_tpl_pos.base();
     dp_matrix[[0, 0]] = hmm_model.emit_prob(
-        Move::Match,
+        TransState::Match,
         encode_2_bases(default_tpl_base, template.first().unwrap().base()),
         *encoded_query.last().unwrap(),
     ) * dp_matrix[[1, 1]];
@@ -168,7 +172,7 @@ pub fn backward(encoded_query: &[u8], template: &Template, hmm_model: &HmmModel)
 
 #[cfg(test)]
 mod test {
-    use crate::em_training::model::{HmmModel, Template};
+    use crate::{em_training::model::Template, hmm_model::HmmModel};
 
     use super::{backward, forward};
 
@@ -177,7 +181,8 @@ mod test {
         let query_bases = vec![0, 1, 2, 3];
         let templates = vec![0, 1, 2, 3];
 
-        let hmm_model = HmmModel::new(4);
+        let hmm_model = HmmModel::new();
+        
         let templates = Template::from_template_bases(&templates, &hmm_model);
 
         let alpha = forward(&query_bases, &templates, &hmm_model);

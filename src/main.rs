@@ -1,13 +1,14 @@
 use clap::Parser;
 use cli::Subcommands;
 use em_training::em_training;
-use supervised_training::{train::train_model_entrance, train_data::train_data_main};
+use supervised_training::{train::train_model_entrance_parallel, train_data::train_data_main};
 
 mod cli;
 mod em_training;
 mod supervised_training;
 mod train_instance;
-
+mod hmm_model;
+mod common;
 fn main() {
     let time_fmt = time::format_description::parse(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
@@ -29,11 +30,15 @@ fn main() {
         }
 
         Subcommands::SupervisedTraining(training_param) => {
-            train_model_entrance(&training_param);
+            // train_model_entrance(&training_param);
+            train_model_entrance_parallel(&training_param);
         }
 
         Subcommands::EmTraining(trainig_param) => {
-            em_training(&trainig_param);
+            tracing::info!("init hmm model");
+            let init_hmm_model = train_model_entrance_parallel(&trainig_param);
+            tracing::info!("init hmm model done, start em training");
+            em_training(&trainig_param, init_hmm_model);
         }
     }
 }

@@ -219,8 +219,6 @@ fn dump_filtered_bam(align_res_bam: &str, query_whitelist: &HashSet<String>) -> 
 
         let qname = String::from_utf8(record.qname().to_vec()).unwrap();
         if query_whitelist.contains(&qname) {
-
-
             bam_writer.write(&record).unwrap();
         }
     }
