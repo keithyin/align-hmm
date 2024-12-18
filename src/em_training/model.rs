@@ -53,9 +53,7 @@ impl Template {
             .skip(1)
             .into_iter()
             .map(|&cur_base| {
-                let mut enc = gskits::dna::SEQ_NT4_TABLE[prev_base as usize];
-                enc <<= 2;
-                enc += gskits::dna::SEQ_NT4_TABLE[cur_base as usize];
+                let enc = encode_2_bases(prev_base, cur_base);
                 let match_prob = model.ctx_move(enc, TransState::Match);
                 let dark_prob = model.ctx_move(enc, TransState::Dark);
                 let branch_prob = model.ctx_move(enc, TransState::Branch);
@@ -79,7 +77,7 @@ impl Template {
     pub fn init_ctx(&self) -> u8 {
         encode_2_bases('A' as u8, self.0[0].base)
     }
-    
+
     #[allow(unused)]
     pub fn ctx(&self, pos: usize) -> u8 {
         assert!(pos < self.0.len());
