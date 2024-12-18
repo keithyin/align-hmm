@@ -53,6 +53,19 @@ pub struct TrainInstance {
 }
 
 impl TrainInstance {
+    pub fn new(
+        ref_aligned_seq: String,
+        read_aligned_seq: String,
+        dw_buckets: Vec<Option<u8>>,
+        name: String,
+    ) -> Self {
+        Self {
+            name,
+            ref_aligned_seq,
+            read_aligned_seq,
+            dw_buckets,
+        }
+    }
     pub fn from_aligned_record_and_ref_seq_and_pin_start_end(
         align_record: &bam::Record,
         ref_seq: &str,
@@ -565,7 +578,7 @@ mod test {
     use rust_htslib::bam::{self, ext::BamRecordExtensions, Read};
     use std::collections::HashMap;
 
-    use super::{local_alignment_to_record, TrainInstance};
+    use super::{build_train_events, local_alignment_to_record, TrainInstance};
 
     #[test]
     fn test_train_instance() {
@@ -655,6 +668,15 @@ mod test {
         }
         println!("{:?}", record);
         println!("ref:{}\nqry:{}", ref_aligned, query_aligned);
+    }
 
+    #[test]
+    fn test_build_train_events() {
+        let ref_aligned_seq = "AAA--CCCG-TC".to_string();
+        let read_aligned_seq = "AAAAACC-GGTC".to_string();
+        let dw_buckets = vec![Some(0), Some(1), Some(2), Some(0), Some(1), Some(1), Some(1), None, Some(1), Some(1), Some(1), Some(1)];
+        let train_ins = TrainInstance::new(ref_aligned_seq, read_aligned_seq, dw_buckets, "he".to_string());
+        let events = build_train_events(&train_ins);
+        
     }
 }
