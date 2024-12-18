@@ -53,8 +53,8 @@ impl TemplatePos {
         self.base
     }
 
-    pub fn prob(&self, movement: TransState) -> f32 {
-        self.probs[movement as usize]
+    pub fn prob(&self, state: TransState) -> f32 {
+        self.probs[state as usize]
     }
 }
 

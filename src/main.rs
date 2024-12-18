@@ -1,7 +1,7 @@
 mod cli;
 mod em_training;
 mod supervised_training;
-mod train_instance;
+mod dataset;
 mod hmm_model;
 mod common;
 mod train_data;

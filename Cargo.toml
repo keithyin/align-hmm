@@ -1,6 +1,6 @@
 [package]
 name = "align-hmm"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 
 [dependencies]
@@ -10,7 +10,7 @@ clap = {version="4.4", features=["derive"]}
 tracing = "0.1.40"
 tracing-subscriber = {version="0.3.18", features=["json", "env-filter", "fmt", "time", "local-time"]}
 anyhow = "1.0.82"
-mm2="0.13"
+mm2="0.15"
 rust-htslib = "0.47.0"
 lazy_static="1.5.0"
 num_cpus="1.16.0"

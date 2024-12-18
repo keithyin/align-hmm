@@ -18,7 +18,7 @@ use crate::{
     common::TransState,
     em_training::model::{decode_2_bases, decode_emit_base, encode_2_bases},
     hmm_model::HmmModel,
-    train_instance::{issue_align_record, train_instance_worker},
+    dataset::{align_record_read_worker, train_instance_worker},
 };
 
 use crate::common::TrainInstance;
@@ -124,7 +124,7 @@ pub fn train_model_entrance_parallel(params: &TrainingParams) -> HmmModel {
                 let record_sender_ = record_sender.clone();
                 let pbar_ = pbar.clone();
                 s.spawn(move || {
-                    issue_align_record(aligned_bam, ref_fasta, pbar_, record_sender_);
+                    align_record_read_worker(aligned_bam, ref_fasta, pbar_, record_sender_);
                 });
             });
         drop(record_sender);

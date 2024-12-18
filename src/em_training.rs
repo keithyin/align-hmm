@@ -7,7 +7,7 @@ use crate::{
     cli::TrainingParams,
     common::{TrainInstance, TransState},
     hmm_model::{HmmBuilder, HmmModel},
-    train_instance::{encode_emit, issue_align_record, train_instance_worker},
+    dataset::{encode_emit, align_record_read_worker, train_instance_worker},
 };
 use crossbeam::channel;
 use fb::{backward, forward};
@@ -40,7 +40,7 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
                     let record_sender_ = record_sender.clone();
                     let pbar_ = pbar.clone();
                     s.spawn(move || {
-                        issue_align_record(aligned_bam, ref_fasta, pbar_, record_sender_);
+                        align_record_read_worker(aligned_bam, ref_fasta, pbar_, record_sender_);
                     });
                 });
             drop(record_sender);

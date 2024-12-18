@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "align-hmm"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "bio 2.0.3",
@@ -1129,9 +1129,9 @@ dependencies = [
 
 [[package]]
 name = "mm2"
-version = "0.13.6"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae74057a132bd93a3455a3c91f9add06876f8e148922608ee3bb118c91611a79"
+checksum = "b1ddef8c27f08efd92fb3b629212057412e670bea13e26aec235c71f4809992f"
 dependencies = [
  "anyhow",
  "bio 1.6.0",
