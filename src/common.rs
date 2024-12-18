@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use bio::alignment::pairwise::Aligner;
 use gskits::{
@@ -15,8 +15,6 @@ use mm2::{
     params::{AlignParams, OupParams},
 };
 use rust_htslib::bam::{self, ext::BamRecordExtensions, Record};
-
-use crate::em_training::model::encode_2_bases;
 
 lazy_static! {
     pub static ref BASE_MAP: HashMap<u8, usize> = {
@@ -46,13 +44,14 @@ pub enum TransState {
 }
 
 pub struct TrainInstance {
-    name: String,
+    pub name: String,
     ref_aligned_seq: String,
     read_aligned_seq: String,
     dw_buckets: Vec<Option<u8>>, // base 的 dw 在哪个桶里
 }
 
 impl TrainInstance {
+    #[allow(unused)]
     pub fn new(
         ref_aligned_seq: String,
         read_aligned_seq: String,
@@ -409,165 +408,6 @@ pub fn local_alignment_to_record(target: &str, query: &str, qname: Option<&str>)
     record
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Emit {
-    pub ctx: u8,
-    pub state: TransState,
-    pub emit_base_enc: u8,
-}
-
-impl Emit {
-    pub fn new(
-        ref_base1: u8,
-        ref_base2: u8,
-        state: TransState,
-        read_base: u8,
-        dw_feat: u8,
-    ) -> Self {
-        assert!(dw_feat < 3, "dw_feat:{}", dw_feat);
-        let ctx = encode_2_bases(ref_base1, ref_base2);
-        let emit_base_enc = (dw_feat << 2) + gskits::dna::SEQ_NT4_TABLE[read_base as usize];
-        assert!(
-            emit_base_enc < 12,
-            "dw_feat:{}, read_base:{}, emit_base_enc:{}",
-            dw_feat,
-            read_base as char,
-            emit_base_enc
-        );
-        Self {
-            ctx,
-            state,
-            emit_base_enc,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct CtxState {
-    pub ctx: u8,
-    pub state: TransState,
-}
-
-impl CtxState {
-    pub fn new(ref_base1: u8, ref_base2: u8, state: TransState) -> Self {
-        let ctx = encode_2_bases(ref_base1, ref_base2);
-
-        Self { ctx, state }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TrainEvent {
-    EmitEvent(Emit),
-    CtxStateEvent(CtxState),
-}
-
-/// ref: A' A C G T - - G C C A
-/// rea:    A G G T G G G - C A
-/// A'A AC CG GT TG TG TG GC CC CA
-///   A  G  G  T  G  G  G  -  C  A
-
-pub fn build_train_events(train_instance: &TrainInstance) -> Vec<TrainEvent> {
-    let ref_seq_bytes = train_instance.ref_aligned_seq().as_bytes();
-    let read_seq_bytes = train_instance.read_aligned_seq().as_bytes();
-    let dw_features = train_instance.dw();
-
-    // println!(
-    //         "{}\n{}",
-    //         train_instance.ref_aligned_seq(),
-    //         dw_features
-    //             .iter()
-    //             .map(|v| v.map(|v| v.to_string()).unwrap_or("-".to_string()))
-    //             .collect::<Vec<String>>()
-    //             .join("")
-    //     );
-
-    let refpos2refpos = train_instance.ref_cur_pos2next_ref();
-
-    let mut train_events = vec![];
-
-    let mut pre_ref_base = 'A' as u8;
-    for idx in 0..ref_seq_bytes.len() {
-        let cur_ref_base = ref_seq_bytes[idx];
-        let cur_read_base = read_seq_bytes[idx];
-        if idx == 0 {
-            assert!(cur_ref_base != '-' as u8);
-            train_events.push(TrainEvent::EmitEvent(Emit::new(
-                pre_ref_base,
-                cur_ref_base,
-                TransState::Match,
-                cur_read_base,
-                dw_features[idx].unwrap(),
-            )));
-        } else {
-            match (cur_ref_base as char, cur_read_base as char) {
-                ('-', read_base) => {
-                    // insertion
-                    let read_base = read_base as u8;
-                    let ref_baseidx = refpos2refpos.get(&idx).copied().unwrap();
-                    let ref_base = ref_seq_bytes[ref_baseidx];
-                    assert_ne!(ref_base, '-' as u8, "qname:{}", train_instance.name);
-
-                    let state = if ref_base == read_base {
-                        TransState::Branch
-                    } else {
-                        TransState::Stick
-                    };
-                    train_events.push(TrainEvent::EmitEvent(Emit::new(
-                        pre_ref_base,
-                        ref_base,
-                        state,
-                        read_base,
-                        dw_features[idx].unwrap(),
-                    )));
-                    train_events.push(TrainEvent::CtxStateEvent(CtxState::new(
-                        pre_ref_base,
-                        ref_base,
-                        state,
-                    )));
-                }
-
-                (ref_base, '-') => {
-                    // deletion
-                    let ref_base = ref_base as u8;
-                    train_events.push(TrainEvent::CtxStateEvent(CtxState::new(
-                        pre_ref_base,
-                        ref_base,
-                        TransState::Dark,
-                    )));
-                }
-                (ref_base, read_base) => {
-                    // match
-                    let ref_base = ref_base as u8;
-                    let read_base = read_base as u8;
-                    train_events.push(TrainEvent::EmitEvent(Emit::new(
-                        pre_ref_base,
-                        ref_base,
-                        TransState::Match,
-                        read_base,
-                        dw_features[idx].expect(&format!(
-                            "no dw feature in idx:{}, ref_base:{}, read_base:{}",
-                            idx, ref_base as char, read_base as char
-                        )),
-                    )));
-
-                    if (idx + 1) != ref_seq_bytes.len() {
-                        train_events.push(TrainEvent::CtxStateEvent(CtxState::new(
-                            pre_ref_base,
-                            cur_ref_base,
-                            TransState::Match,
-                        )));
-                    }
-                }
-            }
-        }
-        if cur_ref_base != '-' as u8 {
-            pre_ref_base = cur_ref_base;
-        }
-    }
-
-    train_events
-}
 
 #[cfg(test)]
 mod test {
@@ -578,7 +418,8 @@ mod test {
     use rust_htslib::bam::{self, ext::BamRecordExtensions, Read};
     use std::collections::HashMap;
 
-    use super::{build_train_events, local_alignment_to_record, TrainInstance};
+
+    use super::{ local_alignment_to_record, TrainInstance};
 
     #[test]
     fn test_train_instance() {
@@ -668,15 +509,5 @@ mod test {
         }
         println!("{:?}", record);
         println!("ref:{}\nqry:{}", ref_aligned, query_aligned);
-    }
-
-    #[test]
-    fn test_build_train_events() {
-        let ref_aligned_seq = "AAA--CCCG-TC".to_string();
-        let read_aligned_seq = "AAAAACC-GGTC".to_string();
-        let dw_buckets = vec![Some(0), Some(1), Some(2), Some(0), Some(1), Some(1), Some(1), None, Some(1), Some(1), Some(1), Some(1)];
-        let train_ins = TrainInstance::new(ref_aligned_seq, read_aligned_seq, dw_buckets, "he".to_string());
-        let events = build_train_events(&train_ins);
-        
     }
 }

@@ -1,7 +1,9 @@
 use std::ops::Deref;
 
-
-use crate::{common::TransState, hmm_model::HmmModel};
+use crate::{
+    common::{TransState, IDX_BASE_MAP},
+    hmm_model::HmmModel,
+};
 
 pub fn encode_2_bases(prev: u8, cur: u8) -> u8 {
     let enc1 = gskits::dna::SEQ_NT4_TABLE[prev as usize];
@@ -11,6 +13,29 @@ pub fn encode_2_bases(prev: u8, cur: u8) -> u8 {
     assert!(enc2 < 4, "invalid base, cur: {}", cur as char);
 
     (enc1 << 2) + enc2
+}
+
+pub fn decode_2_bases(enc: u8) -> String {
+    format!(
+        "{}{}",
+        IDX_BASE_MAP.get(&(enc >> 2)).copied().unwrap() as char,
+        IDX_BASE_MAP.get(&(enc & 0b11)).copied().unwrap() as char
+    )
+}
+
+pub fn encode_emit_base(dw_bucket: u8, base: u8) -> u8 {
+    assert!(dw_bucket < 4);
+    let enc = gskits::dna::SEQ_NT4_TABLE[base as usize];
+    assert!(enc < 4);
+    (dw_bucket << 2) + enc
+}
+
+pub fn decode_emit_base(enc: u8) -> String {
+    format!(
+        "{}{}",
+        enc >> 2,
+        IDX_BASE_MAP.get(&(enc & 0b11)).copied().unwrap() as char
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

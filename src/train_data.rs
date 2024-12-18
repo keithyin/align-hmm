@@ -40,50 +40,6 @@ pub fn train_data_main(params: &TrainDataParams) -> Option<()> {
 }
 
 #[tracing::instrument(skip(subreads_bam, ref_fa, threads))]
-fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow::Result<String> {
-    tracing::info!("do alignment");
-    let threads = threads.unwrap_or(num_cpus::get());
-    let o_file_prefix = format!("{}.align4arrow", subreads_bam.rsplit_once(".").unwrap().0);
-    let o_filepath = format!("{o_file_prefix}.bam");
-    let mut cmd = process::Command::new("gsmm2-rs");
-    cmd.args([
-        "-q",
-        subreads_bam,
-        "-r",
-        ref_fa,
-        "-p",
-        o_file_prefix.as_str(),
-        "--aligner",
-        "minimap2",
-        "-t",
-        threads.to_string().as_str(),
-        "--forceIndex",
-        // "--num_querys_per_fa", "4000000",
-        "--kmer",
-        "15",
-        "--wins",
-        "10",
-        "--s_m",
-        "2",
-        "--s_mm",
-        "4",
-        "--s_go",
-        "4,24",
-        "--s_ge",
-        "2,1",
-        "--force_alignment",
-        "--no_extra_info",
-    ]);
-
-    let status = cmd.status()?;
-    if !status.success() {
-        return Err(anyhow!("run alignment command error"));
-    }
-
-    Ok(o_filepath)
-}
-
-#[tracing::instrument(skip(subreads_bam, ref_fa, threads))]
 fn gsmm2_alignment(
     subreads_bam: &str,
     ref_fa: &str,
@@ -106,7 +62,7 @@ fn gsmm2_alignment(
         ref_fa,
         "-p",
         o_file_prefix.as_str(),
-        "--noMar"
+        "--noMar",
     ]);
 
     let status = cmd.status()?;
@@ -127,7 +83,7 @@ fn query_name_whitelist(
 
     let mut whitelist = HashSet::new();
     let mut bam_reader = bam::Reader::from_path(align_res_bam).unwrap();
-    bam_reader.set_threads(4).unwrap();
+    bam_reader.set_threads(num_cpus::get()).unwrap();
 
     let header = bam::Header::from_template(bam_reader.header());
     let head_view = bam::HeaderView::from_header(&header);
@@ -201,16 +157,16 @@ fn query_name_whitelist(
 
 fn dump_filtered_bam(align_res_bam: &str, query_whitelist: &HashSet<String>) -> String {
     let res_bam = format!(
-        "{}.arrow_hmm.bam",
+        "{}.align_hmm_train_data.bam",
         align_res_bam.rsplit_once(".").unwrap().0
     );
 
     let mut bam_reader = bam::Reader::from_path(align_res_bam).unwrap();
-    bam_reader.set_threads(4).unwrap();
+    bam_reader.set_threads(num_cpus::get() / 2).unwrap();
 
     let header = bam::Header::from_template(bam_reader.header());
     let mut bam_writer = bam::Writer::from_path(&res_bam, &header, bam::Format::Bam).unwrap();
-    bam_writer.set_threads(4).unwrap();
+    bam_writer.set_threads(num_cpus::get() / 2).unwrap();
 
     let pbar = get_spin_pb("dumping result bam".to_string(), DEFAULT_INTERVAL);
     for record in bam_reader.records() {
@@ -226,3 +182,47 @@ fn dump_filtered_bam(align_res_bam: &str, query_whitelist: &HashSet<String>) -> 
 
     res_bam
 }
+
+// #[tracing::instrument(skip(subreads_bam, ref_fa, threads))]
+// fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow::Result<String> {
+//     tracing::info!("do alignment");
+//     let threads = threads.unwrap_or(num_cpus::get());
+//     let o_file_prefix = format!("{}.align4arrow", subreads_bam.rsplit_once(".").unwrap().0);
+//     let o_filepath = format!("{o_file_prefix}.bam");
+//     let mut cmd = process::Command::new("gsmm2-rs");
+//     cmd.args([
+//         "-q",
+//         subreads_bam,
+//         "-r",
+//         ref_fa,
+//         "-p",
+//         o_file_prefix.as_str(),
+//         "--aligner",
+//         "minimap2",
+//         "-t",
+//         threads.to_string().as_str(),
+//         "--forceIndex",
+//         // "--num_querys_per_fa", "4000000",
+//         "--kmer",
+//         "15",
+//         "--wins",
+//         "10",
+//         "--s_m",
+//         "2",
+//         "--s_mm",
+//         "4",
+//         "--s_go",
+//         "4,24",
+//         "--s_ge",
+//         "2,1",
+//         "--force_alignment",
+//         "--no_extra_info",
+//     ]);
+
+//     let status = cmd.status()?;
+//     if !status.success() {
+//         return Err(anyhow!("run alignment command error"));
+//     }
+
+//     Ok(o_filepath)
+// }

@@ -2,9 +2,9 @@ use core::str;
 use ndarray::{s, Array2, Array3, Axis};
 use std::io::{BufWriter, Write};
 
-use crate::common::TransState;
+use crate::common::{TransState, IDX_BASE_MAP};
 
-use super::common::{TrainEvent, IDX_BASE_MAP};
+use super::supervised_training::TrainEvent;
 
 const NUM_STATE: usize = 4;
 const NUM_EMIT_STATE: usize = 3;

@@ -1,14 +1,18 @@
-use clap::Parser;
-use cli::Subcommands;
-use em_training::em_training;
-use supervised_training::{train::train_model_entrance_parallel, train_data::train_data_main};
-
 mod cli;
 mod em_training;
 mod supervised_training;
 mod train_instance;
 mod hmm_model;
 mod common;
+mod train_data;
+
+use clap::Parser;
+use cli::Subcommands;
+use em_training::em_training;
+use supervised_training::train_model_entrance_parallel;
+use train_data::train_data_main;
+
+
 fn main() {
     let time_fmt = time::format_description::parse(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
