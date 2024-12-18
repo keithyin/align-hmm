@@ -15,8 +15,6 @@ fn main() {
     )
     .unwrap();
 
-    // let timer = tracing_subscriber::fmt::time::OffsetTime::new(time_offset, time_fmt);
-    // let timer = tracing_subscriber::fmt::time::LocalTime::new(time_fmt);
     let time_offset =
         time::UtcOffset::current_local_offset().unwrap_or_else(|_| time::UtcOffset::UTC);
     let timer = tracing_subscriber::fmt::time::OffsetTime::new(time_offset, time_fmt);
