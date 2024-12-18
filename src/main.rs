@@ -24,7 +24,7 @@ fn main() {
 
     let params = cli::Cli::parse();
     match params.commands {
-        Subcommands::SupervisedTrainData(train_data_param) => {
+        Subcommands::TrainData(train_data_param) => {
             train_data_main(&train_data_param);
         }
 

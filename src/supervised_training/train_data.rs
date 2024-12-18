@@ -12,9 +12,9 @@ use gskits::{
 };
 use rust_htslib::bam::{self, ext::BamRecordExtensions, Read};
 
-use crate::cli::SupervisedTrainDataParams;
+use crate::cli::TrainDataParams;
 
-pub fn train_data_main(params: &SupervisedTrainDataParams) -> Option<()> {
+pub fn train_data_main(params: &TrainDataParams) -> Option<()> {
     let subreads_bam = &params.sbr_bam;
     let ref_fa = &params.ref_fa;
 
@@ -24,7 +24,8 @@ pub fn train_data_main(params: &SupervisedTrainDataParams) -> Option<()> {
     let bed_file = params.bed_file.as_ref().and_then(|v| Some(v.as_str()));
 
     // 1. do alignment
-    let align_res_bam = alignment(subreads_bam, ref_fa, None).unwrap();
+    // let align_res_bam = alignment(subreads_bam, ref_fa, None).unwrap();
+    let align_res_bam = gsmm2_alignment(subreads_bam, ref_fa, None).unwrap();
 
     // 2. get whitelist according to vcf, bed, and single mapping
     let whitelist = query_name_whitelist(&align_res_bam, vcf_file, bed_file);
@@ -56,7 +57,7 @@ fn alignment(subreads_bam: &str, ref_fa: &str, threads: Option<usize>) -> anyhow
         "minimap2",
         "-t",
         threads.to_string().as_str(),
-        "--force_index",
+        "--forceIndex",
         // "--num_querys_per_fa", "4000000",
         "--kmer",
         "15",
@@ -101,10 +102,11 @@ fn gsmm2_alignment(
         "align",
         "-q",
         subreads_bam,
-        "-r",
+        "-t",
         ref_fa,
         "-p",
         o_file_prefix.as_str(),
+        "--noMar"
     ]);
 
     let status = cmd.status()?;
@@ -217,6 +219,8 @@ fn dump_filtered_bam(align_res_bam: &str, query_whitelist: &HashSet<String>) -> 
 
         let qname = String::from_utf8(record.qname().to_vec()).unwrap();
         if query_whitelist.contains(&qname) {
+
+
             bam_writer.write(&record).unwrap();
         }
     }
