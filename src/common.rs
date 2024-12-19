@@ -49,6 +49,18 @@ impl Default for TransState {
     }
 }
 
+impl From<usize> for TransState {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => TransState::Match,
+            1 => TransState::Branch,
+            2 => TransState::Stick,
+            3 => TransState::Dark,
+            _ => panic!("invalid value:{}", value)
+        }
+    }
+}
+
 pub struct TrainInstance {
     pub name: String,
     ref_aligned_seq: String,

@@ -1,5 +1,5 @@
 use core::{f64, str};
-use ndarray::{s, Array2, Array3, Axis};
+use ndarray::{s, Array, Array1, Array2, Array3, Axis, Dimension};
 use std::io::{BufWriter, Write};
 
 use crate::common::{TransState, IDX_BASE_MAP};
@@ -258,7 +258,9 @@ impl From<&HmmBuilderV2> for HmmModel {
             })
             .collect::<Vec<_>>();
 
-        let ctx_state_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| ctx_state_prob[ctx][state]);
+        let ctx_state_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
+            ctx_state_prob[ctx][state]
+        });
         let ctx_prob = ctx_state_prob.sum_axis(Axis(1));
 
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
@@ -315,21 +317,53 @@ impl From<&HmmBuilderV2> for HmmModel {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        
-        let state_ctx_emit = Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| state_ctx_emit[state][ctx][emit]);
-        let state_ctx = state_ctx_emit.sum_axis(Axis(2));
-        
-        let move_ctx_emit_prob =
-        Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-            state_ctx_emit[[state, ctx, emit]] / state_ctx[[state, ctx]]
-        });
 
+        let state_ctx_emit =
+            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
+                state_ctx_emit[state][ctx][emit]
+            });
+        let state_ctx = state_ctx_emit.sum_axis(Axis(2));
+
+        let move_ctx_emit_prob =
+            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
+                state_ctx_emit[[state, ctx, emit]] / state_ctx[[state, ctx]]
+            });
 
         let mut hmm = HmmModel::new();
         hmm.set_emission_prob(move_ctx_emit_prob);
         hmm.set_ctx_trans_prob(ctx_move_prob);
         hmm
+    }
+}
 
+impl From<&HmmBuilderV3> for HmmModel {
+    fn from(value: &HmmBuilderV3) -> Self {
+        let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
+        let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
+            value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]
+        });
+        let ctx_move_prob = ctx_move_prob.mapv(|v| v.exp());
+        let ctx_prob = ctx_move_prob.sum_axis(Axis(1));
+        let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
+            ctx_move_prob[[ctx, state]] / ctx_prob[ctx]
+        });
+
+        let move_ctx_emit_max: Array2<f64> = value
+            .move_ctx_emit_prob_numerator
+            .axis_iter(Axis(0))
+            .map(|arr2d| max_axis_2d(&arr2d.to_owned(), 1))
+            .collect();
+
+        let move_ctx_prob = value.move_ctx_emit_prob_numerator.sum_axis(Axis(2));
+        let move_ctx_emit_prob =
+            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
+                value.move_ctx_emit_prob_numerator[[state, ctx, emit]] / move_ctx_prob[[state, ctx]]
+            });
+
+        let mut default_model = Self::new();
+        default_model.set_emission_prob(move_ctx_emit_prob);
+        default_model.set_ctx_trans_prob(ctx_move_prob);
+        default_model
     }
 }
 
@@ -436,8 +470,120 @@ impl HmmBuilderV2 {
     }
 }
 
+#[derive(Debug)]
+pub struct HmmBuilderV3 {
+    ctx_move_prob_numerator: Array2<f64>,      // 16 * 4
+    move_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
+    ctx_move_flag: Array2<bool>,
+    move_ctx_emit_flag: Array3<bool>,
+}
+
+impl HmmBuilderV3 {
+    pub fn new() -> Self {
+        Self {
+            ctx_move_prob_numerator: Array2::zeros((NUM_CTX, NUM_STATE)),
+            move_ctx_emit_prob_numerator: Array3::zeros((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT)),
+            ctx_move_flag: Array2::from_shape_fn((NUM_CTX, NUM_STATE), |_| false),
+            move_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
+                false
+            }),
+        }
+    }
+
+    pub fn add_to_ctx_move_prob_numerator(&mut self, ctx: u8, movement: TransState, log_prob: f64) {
+        if !self.ctx_move_flag[[ctx as usize, movement as usize]] {
+            self.ctx_move_prob_numerator[[ctx as usize, movement as usize]] = log_prob;
+            self.ctx_move_flag[[ctx as usize, movement as usize]] = true;
+        } else {
+            self.ctx_move_prob_numerator[[ctx as usize, movement as usize]] = stream_acc_log_prob(
+                self.ctx_move_prob_numerator[[ctx as usize, movement as usize]],
+                log_prob,
+            );
+        }
+    }
+
+    pub fn add_to_move_ctx_emit_prob_numerator(
+        &mut self,
+        ctx: u8,
+        movement: TransState,
+        emit: u8,
+        log_prob: f64,
+    ) {
+        assert!((movement as usize) < 3);
+
+        if !self.move_ctx_emit_flag[[movement as usize, ctx as usize, emit as usize]] {
+            self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
+                log_prob;
+        } else {
+            self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
+                stream_acc_log_prob(
+                    self.move_ctx_emit_prob_numerator
+                        [[movement as usize, ctx as usize, emit as usize]],
+                    log_prob,
+                );
+        }
+
+        self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] +=
+            log_prob;
+    }
+
+    pub fn merge(&mut self, other: &HmmBuilderV3) {
+        for ctx in 0..NUM_CTX {
+            for state in 0..NUM_STATE {
+                if other.ctx_move_flag[[ctx, state]] {
+                    self.add_to_ctx_move_prob_numerator(
+                        ctx as u8,
+                        state.into(),
+                        other.ctx_move_prob_numerator[[ctx, state]],
+                    );
+                }
+            }
+        }
+
+        // 3 state for emit
+        for state in 0..NUM_EMIT_STATE {
+            for ctx in 0..NUM_CTX {
+                for emit in 0..NUM_EMIT {
+                    if other.move_ctx_emit_flag[[state, ctx, emit]] {
+                        self.add_to_move_ctx_emit_prob_numerator(
+                            ctx as u8,
+                            state.into(),
+                            emit as u8,
+                            other.move_ctx_emit_prob_numerator[[state, ctx, emit]],
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn stream_acc_log_prob(acc: f64, new_log_prob: f64) -> f64 {
+    let max_log = if acc > new_log_prob {
+        acc
+    } else {
+        new_log_prob
+    };
+    max_log + (1. + (-(acc - new_log_prob).abs()).exp()).ln()
+}
+
+pub fn max_axis_2d(arr: &Array2<f64>, mut axis: usize) -> Array1<f64> {
+    if axis == 0 {
+        axis = 1;
+    } else {
+        axis = 0;
+    };
+    arr.axis_iter(Axis(axis))
+        .map(|view| view.iter().cloned().fold(f64::MIN, f64::max))
+        .collect()
+}
+
 #[cfg(test)]
 mod test {
+    use ndarray::Array2;
+
+    use crate::hmm_model::max_axis_2d;
+
     use super::{HmmBuilder, HmmBuilderV2, HmmModel};
 
     #[test]
@@ -449,12 +595,17 @@ mod test {
 
     #[test]
     fn test_builder_v2() {
-
         let mut builder = HmmBuilderV2::new();
         builder.add_to_ctx_move_prob_numerator(0, crate::common::TransState::Match, -2.0);
 
         let hmm_model: HmmModel = (&builder).into();
         println!("{:?}", hmm_model);
+    }
 
+    #[test]
+    fn test_max_axis_2d() {
+        let values = vec![1.0_f64, 2., 3., 4., 5., 6.];
+        let values: Array2<f64> = Array2::from_shape_vec((2, 3), values).unwrap();
+        println!("{:?}", max_axis_2d(&values, 1));
     }
 }
