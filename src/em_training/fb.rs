@@ -1,6 +1,9 @@
 use ndarray::Array2;
 
-use crate::{common::IDX_BASE_MAP, hmm_model::HmmModel};
+use crate::{
+    common::IDX_BASE_MAP,
+    hmm_model::{log_sum_exp, HmmModel},
+};
 
 use super::model::{decode_2_bases, decode_emit_base, encode_2_bases, Template, TemplatePos};
 use crate::common::TransState;
@@ -168,15 +171,7 @@ pub fn forward_with_log_sum_exp_trick(
                 scores.push(this_move_score);
             }
 
-            let max_score = scores
-                .iter()
-                .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
-                .copied()
-                .unwrap_or(f64::MIN);
-            scores.iter_mut().for_each(|v| *v -= max_score);
-            let score = max_score + scores.into_iter().map(|v| v.exp()).sum::<f64>().ln();
-
-            dp_matrix[[row, col]] = score;
+            dp_matrix[[row, col]] = log_sum_exp(&scores);
         }
 
         prev_trans_probs = cur_trans_probs;
@@ -365,15 +360,8 @@ pub fn backward_with_log_sum_exp_trick(
                     cur_trans_probs.prob(TransState::Dark).ln() + dp_matrix[[row, col + 1]];
                 scores.push(this_move_score);
             }
-            let max_score = scores
-                .iter()
-                .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
-                .copied()
-                .unwrap_or(f64::MIN);
-            scores.iter_mut().for_each(|v| *v -= max_score);
-            let score = max_score + scores.into_iter().map(|v| v.exp()).sum::<f64>().ln();
 
-            dp_matrix[[row, col]] = score;
+            dp_matrix[[row, col]] = log_sum_exp(&scores);
         }
     }
     let default_tpl_pos = TemplatePos::default();
@@ -552,7 +540,7 @@ mod test {
             fb::{backward_with_log_sum_exp_trick, forward_with_log_sum_exp_trick, veterbi_decode},
             model::Template,
         },
-        hmm_model_params::{v1, v2},
+        hmm_models::v1,
     };
 
     use super::{backward, forward};
@@ -599,7 +587,7 @@ mod test {
         let templates = b"CCGAACTAGTCTCAGGCTTCAACATCGAATACGCCGCAGGCCCCTTCGCCCTATTCTTCATAGCCGAATACACAAACATTATTATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATAACGCACTCTCCCCTGAACTCTACACAACATATTTTGTCACCAAGACCCTACTTCTGACCTCCCTGTTCTTATGAATTCGAACAGCATACCCCCGATTCCGC";
         let query = "GGGAGCCGAACTAGTCTCAGGCTTCACATCGAGTTTCCCGCAGCCTTCGCCCTATCTTCCATAGCCGAATACACAAACATATATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATGACGCACTCTCCCCTGAACTCCTACACAACATATTTTGTCACCAAGACCCTACTTCTAACCTCCCTGTTCTTATAATTCGAACAGCATCACCCCCGATTCCGC";
         let encoded_emit = encode_emit(&vec![0; 230], query);
-        let hmm_model = v2::get_hmm_model();
+        let hmm_model = v1::get_hmm_model();
         let templates = Template::from_template_bases(templates, &hmm_model);
         println!("{}", veterbi_decode(&encoded_emit, &templates, &hmm_model));
     }
@@ -609,7 +597,7 @@ mod test {
         let templates = b"CCGAACTAGTCTCAGGCTTCAACATCGAATACGCCGCAGGCCCCTTCGCCCTATTCTTCATAGCCGAATACACAAACATTATTATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATAACGCACTCTCCCCTGAACTCTACACAACATATTTTGTCACCAAGACCCTACTTCTGACCTCCCTGTTCTTATGAATTCGAACAGCATACCCCCGATTCCGC";
         let query = "GGGAGCCGAACTAGTCTCAGGCTTCACATCGAGTTTCCCGCAGCCTTCGCCCTATCTTCCATAGCCGAATACACAAACATATATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATGACGCACTCTCCCCTGAACTCCTACACAACATATTTTGTCACCAAGACCCTACTTCTAACCTCCCTGTTCTTATAATTCGAACAGCATCACCCCCGATTCCGC";
         let encoded_emit = encode_emit(&vec![0; 230], query);
-        let hmm_model = v2::get_hmm_model();
+        let hmm_model = v1::get_hmm_model();
         let templates = Template::from_template_bases(templates, &hmm_model);
 
         println!("{:?}", forward(&encoded_emit, &templates, &hmm_model));
@@ -618,7 +606,10 @@ mod test {
             forward_with_log_sum_exp_trick(&encoded_emit, &templates, &hmm_model)
         );
         println!("{:?}", backward(&encoded_emit, &templates, &hmm_model));
-        println!("{:?}", backward_with_log_sum_exp_trick(&encoded_emit, &templates, &hmm_model));
+        println!(
+            "{:?}",
+            backward_with_log_sum_exp_trick(&encoded_emit, &templates, &hmm_model)
+        );
     }
 
     #[test]

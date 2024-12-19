@@ -339,6 +339,8 @@ impl From<&HmmBuilderV2> for HmmModel {
 impl From<&HmmBuilderV3> for HmmModel {
     fn from(value: &HmmBuilderV3) -> Self {
         let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
+        assert_eq!(ctx_prob_max.shape(), &[NUM_CTX]);
+        println!("{:?}", ctx_prob_max);
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
             value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]
         });
@@ -352,6 +354,10 @@ impl From<&HmmBuilderV3> for HmmModel {
             .axis_iter(Axis(0))
             .map(|arr2d| max_axis_2d(&arr2d.to_owned(), 1))
             .collect::<Vec<_>>();
+
+            assert_eq!(move_ctx_emit_max.len(), NUM_EMIT_STATE);
+            assert_eq!(move_ctx_emit_max[0].shape(), &[NUM_CTX]);
+
         let move_ctx_emit_max = Array2::from_shape_fn((NUM_EMIT_STATE, NUM_CTX), |(state, ctx)| {
             move_ctx_emit_max[state][ctx]
         });
@@ -522,6 +528,7 @@ impl HmmBuilderV3 {
         if !self.move_ctx_emit_flag[[movement as usize, ctx as usize, emit as usize]] {
             self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
                 log_prob;
+            self.move_ctx_emit_flag[[movement as usize, ctx as usize, emit as usize]] = true;
         } else {
             self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
                 stream_acc_log_prob(
@@ -530,9 +537,6 @@ impl HmmBuilderV3 {
                     log_prob,
                 );
         }
-
-        self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] +=
-            log_prob;
     }
 
     pub fn merge(&mut self, other: &HmmBuilderV3) {
@@ -566,7 +570,7 @@ impl HmmBuilderV3 {
     }
 }
 
-/// log sum exp trick
+/// log sum exp trick. for 2 log probs
 pub fn stream_acc_log_prob(acc: f64, new_log_prob: f64) -> f64 {
     let max_log = if acc > new_log_prob {
         acc
@@ -574,6 +578,17 @@ pub fn stream_acc_log_prob(acc: f64, new_log_prob: f64) -> f64 {
         new_log_prob
     };
     max_log + (1. + (-(acc - new_log_prob).abs()).exp()).ln()
+}
+
+/// log sum exp trick. for list of log probs
+pub fn log_sum_exp(scores: &Vec<f64>) -> f64 {
+    let max_score = scores
+                .iter()
+                .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
+                .copied()
+                .unwrap_or(f64::MIN);
+    let scores = scores.iter().map(|&v| v - max_score).collect::<Vec<_>>();
+    max_score + scores.into_iter().map(|v| v.exp()).sum::<f64>().ln()
 }
 
 pub fn max_axis_2d(arr: &Array2<f64>, mut axis: usize) -> Array1<f64> {
@@ -593,7 +608,7 @@ mod test {
 
     use crate::hmm_model::max_axis_2d;
 
-    use super::{HmmBuilder, HmmBuilderV2, HmmModel};
+    use super::{stream_acc_log_prob, HmmBuilder, HmmBuilderV2, HmmModel};
 
     #[test]
     fn test_builder_merge() {
@@ -616,5 +631,14 @@ mod test {
         let values = vec![1.0_f64, 2., 3., 4., 5., 6.];
         let values: Array2<f64> = Array2::from_shape_vec((2, 3), values).unwrap();
         println!("{:?}", max_axis_2d(&values, 1));
+    }
+
+    #[test]
+    fn test_stream_acc_log_prob() {
+
+        let v = stream_acc_log_prob(-1.0, -2.0);
+        println!("{}", v.exp());
+        println!("{}", (-1.0_f64).exp() + (-2.0_f64).exp());
+
     }
 }

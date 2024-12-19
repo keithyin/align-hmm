@@ -5,12 +5,12 @@ mod dataset;
 mod hmm_model;
 mod common;
 mod train_data;
-mod hmm_model_params;
+mod hmm_models;
 
 use clap::Parser;
 use cli::Subcommands;
 use em_training::em_training;
-use hmm_model_params::v1;
+use hmm_models::v1;
 use supervised_training::train_model_entrance_parallel;
 use train_data::train_data_main;
 

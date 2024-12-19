@@ -10,7 +10,10 @@ use crate::{
     hmm_model::{HmmBuilderV3, HmmModel},
 };
 use crossbeam::channel;
-use fb::{backward, backward_with_log_sum_exp_trick, forward, forward_with_log_sum_exp_trick, veterbi_decode};
+use fb::{
+    backward, backward_with_log_sum_exp_trick, forward, forward_with_log_sum_exp_trick,
+    veterbi_decode,
+};
 use gskits::pbar::{get_spin_pb, DEFAULT_INTERVAL};
 use model::{encode_2_bases, Template, TemplatePos};
 pub mod fb;
@@ -115,7 +118,11 @@ pub fn train_worker(
 
         if should_print && idx == 0 {
             should_print = false;
-            tracing::info!("qname: {}, align:\n{}", train_ins.name, veterbi_decode(&encoded_emit, &tpl, hmm_model));
+            tracing::info!(
+                "qname: {}, align:\n{}",
+                train_ins.name,
+                veterbi_decode(&encoded_emit, &tpl, hmm_model)
+            );
         }
 
         let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
