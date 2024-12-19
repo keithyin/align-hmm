@@ -33,13 +33,13 @@ pub fn align_record_read_worker(
     let mut tid2refname = HashMap::new();
 
     let mut align_record = BamRecord::new();
-    let mut cnt = 0;
+    // let mut cnt = 0;
     while let Some(v) = aligned_bam_reader.read(&mut align_record) {
         pbar.lock().unwrap().inc(1);
         cnt += 1;
-        if cnt > 1000 {
-            break;
-        }
+        // if cnt > 1000 {
+        //     break;
+        // }
         if v.is_ok() {
             let tid = align_record.tid();
             if !tid2refname.contains_key(&tid) {
