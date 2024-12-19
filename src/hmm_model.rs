@@ -1,5 +1,5 @@
 use core::{f64, str};
-use ndarray::{s, Array, Array1, Array2, Array3, Axis, Dimension};
+use ndarray::{s, stack, Array, Array1, Array2, Array3, Axis, Dimension};
 use std::io::{BufWriter, Write};
 
 use crate::common::{TransState, IDX_BASE_MAP};
@@ -347,17 +347,25 @@ impl From<&HmmBuilderV3> for HmmModel {
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
             ctx_move_prob[[ctx, state]] / ctx_prob[ctx]
         });
-
-        let move_ctx_emit_max: Array2<f64> = value
+        let move_ctx_emit_max = value
             .move_ctx_emit_prob_numerator
             .axis_iter(Axis(0))
             .map(|arr2d| max_axis_2d(&arr2d.to_owned(), 1))
-            .collect();
+            .collect::<Vec<_>>();
+        let move_ctx_emit_max = Array2::from_shape_fn((NUM_EMIT_STATE, NUM_CTX), |(state, ctx)| {
+            move_ctx_emit_max[state][ctx]
+        });
 
-        let move_ctx_prob = value.move_ctx_emit_prob_numerator.sum_axis(Axis(2));
         let move_ctx_emit_prob =
             Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-                value.move_ctx_emit_prob_numerator[[state, ctx, emit]] / move_ctx_prob[[state, ctx]]
+                value.move_ctx_emit_prob_numerator[[state, ctx, emit]]
+                    - move_ctx_emit_max[[state, ctx]]
+            });
+        let move_ctx_emit_prob = move_ctx_emit_prob.mapv(|v| v.exp());
+        let move_ctx_prob = move_ctx_emit_prob.sum_axis(Axis(2));
+        let move_ctx_emit_prob =
+            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
+                move_ctx_emit_prob[[state, ctx, emit]] / move_ctx_prob[[state, ctx]]
             });
 
         let mut default_model = Self::new();
@@ -558,6 +566,7 @@ impl HmmBuilderV3 {
     }
 }
 
+/// log sum exp trick
 pub fn stream_acc_log_prob(acc: f64, new_log_prob: f64) -> f64 {
     let max_log = if acc > new_log_prob {
         acc
