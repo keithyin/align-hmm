@@ -226,7 +226,6 @@ impl From<&HmmBuilderV2> for HmmModel {
     fn from(value: &HmmBuilderV2) -> Self {
         let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
         assert_eq!(ctx_prob_max.shape(), &[NUM_CTX]);
-        println!("log_likelihood:{:?}", value.log_likelihoods);
         // println!("{:?}", value.ctx_move_prob_numerator);
         // println!("{:?}", ctx_prob_max);
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
@@ -423,6 +422,10 @@ impl HmmBuilderV2 {
                 }
             }
         }
+    }
+
+    pub fn get_log_likelihood(&self) -> Option<f64> {
+        self.log_likelihoods
     }
 }
 

@@ -77,6 +77,9 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
                 let hb = h.join().unwrap();
                 final_hmm_builder.merge(&hb);
             });
+
+            tracing::info!("epoch:{}, log_likelihood:{:?}", epoch, final_hmm_builder.get_log_likelihood());
+
             (&final_hmm_builder).into()
         });
 
@@ -128,7 +131,7 @@ pub fn train_worker(
         let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
         let beta_dp = backward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
         hmm_builder.add_log_likehood(beta_dp[[0, 0]]);
-        
+
         assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
         let mut prev_trans_probs = TemplatePos::default();

@@ -559,6 +559,8 @@ mod test {
         let beta = backward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
         println!("{:?}", alpha);
         println!("{:?}", beta);
+        println!("{}", beta[[0, 0]].exp());
+        println!("{}", (alpha + beta).mapv(|v| v.exp()));
     }
 
     #[test]
@@ -574,6 +576,9 @@ mod test {
         let beta = backward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
         println!("{:?}", alpha);
         println!("{:?}", beta);
+        println!("{}", beta[[0, 0]].exp());
+        println!("{}", (alpha + beta).mapv(|v| v.exp()));
+
     }
 
     #[test]
