@@ -81,7 +81,8 @@ impl TrainInstance {
                 .pin_start_end(),
             )
         } else {
-            let (records, new_ref_seq, dw) = change_direction_v2(align_record, ref_seq);
+            // let (records, new_ref_seq, dw) = change_direction_v2(align_record, ref_seq);
+            let (records, new_ref_seq, dw) = change_direction(align_record, ref_seq);
             let align_record_ext = BamRecordExt::new(align_record);
 
             if records.len() == 0 {
@@ -306,6 +307,7 @@ pub fn change_direction(
     (records, ref_sub_seq, dw)
 }
 
+#[allow(unused)]
 pub fn change_direction_v2(
     align_record: &bam::Record,
     ref_seq: &str,
