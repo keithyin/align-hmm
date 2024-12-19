@@ -5,10 +5,12 @@ mod dataset;
 mod hmm_model;
 mod common;
 mod train_data;
+mod hmm_model_params;
 
 use clap::Parser;
 use cli::Subcommands;
 use em_training::em_training;
+use hmm_model_params::v1;
 use supervised_training::train_model_entrance_parallel;
 use train_data::train_data_main;
 
@@ -37,8 +39,9 @@ fn main() {
         }
 
         Subcommands::EmTraining(trainig_param) => {
-            tracing::info!("init hmm model");
-            let init_hmm_model = train_model_entrance_parallel(&trainig_param);
+            // tracing::info!("init hmm model");
+            // let init_hmm_model = train_model_entrance_parallel(&trainig_param);
+            let init_hmm_model = v1::get_hmm_model();
             tracing::info!("init hmm model done, start em training");
             em_training(&trainig_param, init_hmm_model);
         }

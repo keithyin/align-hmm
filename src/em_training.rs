@@ -6,11 +6,11 @@ use std::{
 use crate::{
     cli::TrainingParams,
     common::{TrainInstance, TransState},
-    hmm_model::{HmmBuilder, HmmModel},
-    dataset::{encode_emit, align_record_read_worker, train_instance_worker},
+    dataset::{align_record_read_worker, encode_emit, train_instance_worker},
+    hmm_model::{HmmBuilderV2, HmmModel},
 };
 use crossbeam::channel;
-use fb::{backward, forward};
+use fb::{backward, backward_with_log_sum_exp_trick, forward, forward_with_log_sum_exp_trick, veterbi_decode};
 use gskits::pbar::{get_spin_pb, DEFAULT_INTERVAL};
 use model::{encode_2_bases, Template, TemplatePos};
 pub mod fb;
@@ -23,7 +23,10 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
     assert!(aligned_bams.len() == ref_fastas.len());
 
     for epoch in 0..1000 {
-        let pbar = get_spin_pb(format!("epoch:{} --> em training...", epoch), DEFAULT_INTERVAL);
+        let pbar = get_spin_pb(
+            format!("epoch:{} --> em training...", epoch),
+            DEFAULT_INTERVAL,
+        );
 
         let pbar = Arc::new(Mutex::new(pbar));
         let new_hmm_model: HmmModel = thread::scope(|s| {
@@ -58,14 +61,15 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
             drop(train_ins_sender);
 
             let mut handles = vec![];
-            for _ in 0..(num_cpus::get() / 4 * 3) {
+            for idx in 0..(num_cpus::get() / 4 * 3) {
                 let train_ins_receiver_ = train_ins_receiver.clone();
-                handles.push(s.spawn(move || train(train_ins_receiver_, hmm_model_ref)));
+                handles
+                    .push(s.spawn(move || train_worker(train_ins_receiver_, hmm_model_ref, idx)));
             }
             drop(train_ins_receiver);
 
-            let mut final_hmm_builder = HmmBuilder::new();
-            
+            let mut final_hmm_builder = HmmBuilderV2::new();
+
             handles.into_iter().for_each(|h| {
                 let hb = h.join().unwrap();
                 final_hmm_builder.merge(&hb);
@@ -85,15 +89,15 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
         }
         hmm_model = new_hmm_model;
     }
-
 }
 
-pub fn train(
+pub fn train_worker(
     train_ins_receiver: channel::Receiver<TrainInstance>,
     hmm_model: &HmmModel,
-) -> HmmBuilder {
-    let mut hmm_builder = HmmBuilder::new();
-
+    idx: usize,
+) -> HmmBuilderV2 {
+    let mut hmm_builder = HmmBuilderV2::new();
+    let mut should_print = true;
     for train_ins in train_ins_receiver {
         let rseq = train_ins.ref_aligned_seq().replace('-', "");
         let qseq = train_ins.read_aligned_seq().replace('-', "");
@@ -108,8 +112,14 @@ pub fn train(
 
         let tpl = Template::from_template_bases(rseq.as_bytes(), hmm_model);
         let encoded_emit = encode_emit(&dwell_time, &qseq);
-        let alpha_dp = forward(&encoded_emit, &tpl, hmm_model);
-        let beta_dp = backward(&encoded_emit, &tpl, hmm_model);
+
+        if should_print && idx == 0 {
+            should_print = false;
+            tracing::info!("qname: {}, align:\n{}", train_ins.name, veterbi_decode(&encoded_emit, &tpl, hmm_model));
+        }
+
+        let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
+        let beta_dp = backward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
 
         assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
@@ -123,15 +133,15 @@ pub fn train(
                 let cur_read_base_enc = encoded_emit[row - 1];
                 // for row1 col1, only match trans to this
 
-                if row > 0 && col > 0 {
+                if (row > 1 && col > 1) && (row == 1 && col == 1) {
                     // match, update emission
                     hmm_builder.add_to_move_ctx_emit_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
                         TransState::Match,
                         cur_read_base_enc,
-                        alpha_dp[[row - 1, col - 1]]
-                            * prev_trans_probs.prob(TransState::Match)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col - 1]]
+                            + prev_trans_probs.prob(TransState::Match).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
                 }
 
@@ -140,9 +150,9 @@ pub fn train(
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
                         TransState::Match,
-                        alpha_dp[[row - 1, col - 1]]
-                            * prev_trans_probs.prob(TransState::Match)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col - 1]]
+                            + prev_trans_probs.prob(TransState::Match).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
                 }
 
@@ -155,34 +165,34 @@ pub fn train(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Branch,
                         cur_read_base_enc,
-                        alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(TransState::Branch)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col]]
+                            + cur_trans_prob.prob(TransState::Branch).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
 
                     hmm_builder.add_to_move_ctx_emit_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Stick,
                         cur_read_base_enc,
-                        alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(TransState::Stick)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col]]
+                            + cur_trans_prob.prob(TransState::Stick).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
 
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Branch,
-                        alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(TransState::Branch)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col]]
+                            + cur_trans_prob.prob(TransState::Branch).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
 
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Stick,
-                        alpha_dp[[row - 1, col]]
-                            * prev_trans_probs.prob(TransState::Stick)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row - 1, col]]
+                            + cur_trans_prob.prob(TransState::Stick).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
                 }
 
@@ -190,9 +200,9 @@ pub fn train(
                     hmm_builder.add_to_ctx_move_prob_numerator(
                         encode_2_bases(prev_tpl_base, cur_tpl_base),
                         TransState::Dark,
-                        alpha_dp[[row, col - 1]]
-                            * prev_trans_probs.prob(TransState::Dark)
-                            * beta_dp[[row, col]],
+                        (alpha_dp[[row, col - 1]]
+                            + prev_trans_probs.prob(TransState::Dark).ln()
+                            + beta_dp[[row, col]]).exp(),
                     );
                 }
             }
@@ -208,7 +218,7 @@ pub fn train(
             encode_2_bases(prev_tpl_base, cur_tpl_base),
             TransState::Match,
             cur_base_enc,
-            alpha_dp[[tot_row - 2, tot_col - 2]] * beta_dp[[tot_row - 1, tot_col - 1]],
+            (alpha_dp[[tot_row - 2, tot_col - 2]] + beta_dp[[tot_row - 1, tot_col - 1]]).exp(),
         );
     }
 

@@ -43,6 +43,12 @@ pub enum TransState {
     Dark = 3,   // deletion
 }
 
+impl Default for TransState {
+    fn default() -> Self {
+        TransState::Match
+    }
+}
+
 pub struct TrainInstance {
     pub name: String,
     ref_aligned_seq: String,

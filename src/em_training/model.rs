@@ -41,11 +41,11 @@ pub fn decode_emit_base(enc: u8) -> String {
 #[derive(Debug, Clone, Copy)]
 pub struct TemplatePos {
     base: u8,
-    probs: [f32; 4], // match dark, branch, stick
+    probs: [f64; 4], // match dark, branch, stick
 }
 
 impl TemplatePos {
-    pub fn new(base: u8, probs: [f32; 4]) -> Self {
+    pub fn new(base: u8, probs: [f64; 4]) -> Self {
         Self { base, probs }
     }
 
@@ -53,8 +53,13 @@ impl TemplatePos {
         self.base
     }
 
-    pub fn prob(&self, state: TransState) -> f32 {
-        self.probs[state as usize]
+    pub fn prob(&self, state: TransState) -> f64 {
+        let prob = self.probs[state as usize];
+        if prob < 1e-100 {
+            1e-100
+        } else {
+            prob
+        }
     }
 }
 
@@ -79,12 +84,12 @@ impl Template {
             .into_iter()
             .map(|&cur_base| {
                 let enc = encode_2_bases(prev_base, cur_base);
-                let match_prob = model.ctx_move(enc, TransState::Match);
-                let dark_prob = model.ctx_move(enc, TransState::Dark);
-                let branch_prob = model.ctx_move(enc, TransState::Branch);
-                let stick_prob = model.ctx_move(enc, TransState::Stick);
+                let match_prob = model.ctx_state(enc, TransState::Match);
+                let dark_prob = model.ctx_state(enc, TransState::Dark);
+                let branch_prob = model.ctx_state(enc, TransState::Branch);
+                let stick_prob = model.ctx_state(enc, TransState::Stick);
                 let tpl_pos =
-                    TemplatePos::new(prev_base, [match_prob, dark_prob, branch_prob, stick_prob]);
+                    TemplatePos::new(prev_base, [match_prob, branch_prob, stick_prob, dark_prob]);
                 prev_base = cur_base;
                 tpl_pos
             })
