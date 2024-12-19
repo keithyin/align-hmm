@@ -168,6 +168,7 @@ pub fn forward_with_log_sum_exp_trick(
                 // dark here
                 let this_move_score =
                     dp_matrix[[row, col - 1]] + prev_trans_probs.prob(TransState::Dark).ln();
+                // println!("row:{}, col:{}, prev_score:{}, this_move:{}, score:{}", row, col, dp_matrix[[row, col - 1]], prev_trans_probs.prob(TransState::Dark).ln(), this_move_score);
                 scores.push(this_move_score);
             }
 
@@ -554,8 +555,23 @@ mod test {
 
         let templates = Template::from_template_bases(&templates, &hmm_model);
 
-        let alpha = forward(&query_bases, &templates, &hmm_model);
-        let beta = backward(&query_bases, &templates, &hmm_model);
+        let alpha = forward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
+        let beta = backward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
+        println!("{:?}", alpha);
+        println!("{:?}", beta);
+    }
+
+    #[test]
+    fn test_forward_backward_0() {
+        let query_bases = vec![0, 1, 2];
+        let templates = vec![0, 1, 2];
+
+        let hmm_model = v1::get_hmm_model();
+
+        let templates = Template::from_template_bases(&templates, &hmm_model);
+
+        let alpha = forward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
+        let beta = backward_with_log_sum_exp_trick(&query_bases, &templates, &hmm_model);
         println!("{:?}", alpha);
         println!("{:?}", beta);
     }

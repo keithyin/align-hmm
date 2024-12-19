@@ -98,8 +98,8 @@ impl HmmModel {
     pub fn emit_prob(&self, movement: TransState, ctx: u8, emit: u8) -> f64 {
         assert!((movement as usize) < 3);
         let prob = self.emission_prob[[movement as usize, ctx as usize, emit as usize]];
-        if prob < 1e-100 {
-            1e-100
+        if prob < 1e-10 {
+            1e-10
         } else {
             prob
         }
@@ -107,8 +107,8 @@ impl HmmModel {
 
     pub fn ctx_state(&self, ctx: u8, movement: TransState) -> f64 {
         let prob = self.ctx_trans_prob[[ctx as usize, movement as usize]];
-        if prob < 1e-100 {
-            1e-100
+        if prob < 1e-10 {
+            1e-10
         } else {
             prob
         }
@@ -224,150 +224,43 @@ impl From<&HmmBuilder> for HmmModel {
 
 impl From<&HmmBuilderV2> for HmmModel {
     fn from(value: &HmmBuilderV2) -> Self {
-        let ctx_max = value
-            .ctx_move_prob_numerator
-            .iter()
-            .map(|all_state_v| {
-                all_state_v
-                    .iter()
-                    .flat_map(|v| v.iter())
-                    .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN)
-            })
-            .copied()
-            .collect::<Vec<_>>();
-
-        let ctx_state = value
-            .ctx_move_prob_numerator
-            .iter()
-            .enumerate()
-            .map(|(ctx, state_info)| {
-                state_info
-                    .iter()
-                    .map(|v| v.iter().map(|&v| v - ctx_max[ctx]).collect::<Vec<_>>())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let ctx_state_prob = ctx_state
-            .iter()
-            .map(|all_state| {
-                all_state
-                    .iter()
-                    .map(|single_state| single_state.iter().map(|v| v.exp()).sum::<f64>())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let ctx_state_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
-            ctx_state_prob[ctx][state]
-        });
-        let ctx_prob = ctx_state_prob.sum_axis(Axis(1));
-
-        let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
-            ctx_state_prob[[ctx, state]] / ctx_prob[ctx]
-        });
-
-        let state_ctx_max = value
-            .move_ctx_emit_prob_numerator
-            .iter()
-            .map(|ctx_emit| {
-                ctx_emit
-                    .iter()
-                    .map(|emit| {
-                        emit.iter()
-                            .flat_map(|v| v.iter())
-                            .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
-                            .copied()
-                            .unwrap_or(f64::MIN)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let state_ctx_max = &state_ctx_max;
-        let state_ctx_emit = value
-            .move_ctx_emit_prob_numerator
-            .iter()
-            .enumerate()
-            .map(move |(state, ctx_emit)| {
-                ctx_emit
-                    .iter()
-                    .enumerate()
-                    .map(move |(ctx, emit)| {
-                        emit.iter()
-                            .map(|v| {
-                                v.iter()
-                                    .map(|&v| v - state_ctx_max[state][ctx])
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let state_ctx_emit = state_ctx_emit
-            .iter()
-            .map(|ctx_emit| {
-                ctx_emit
-                    .iter()
-                    .map(|emit| {
-                        emit.iter()
-                            .map(|v| v.iter().map(|&v| v.exp()).sum::<f64>())
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let state_ctx_emit =
-            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-                state_ctx_emit[state][ctx][emit]
-            });
-        let state_ctx = state_ctx_emit.sum_axis(Axis(2));
-
-        let move_ctx_emit_prob =
-            Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-                state_ctx_emit[[state, ctx, emit]] / state_ctx[[state, ctx]]
-            });
-
-        let mut hmm = HmmModel::new();
-        hmm.set_emission_prob(move_ctx_emit_prob);
-        hmm.set_ctx_trans_prob(ctx_move_prob);
-        hmm
-    }
-}
-
-impl From<&HmmBuilderV3> for HmmModel {
-    fn from(value: &HmmBuilderV3) -> Self {
         let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
         assert_eq!(ctx_prob_max.shape(), &[NUM_CTX]);
-        println!("{:?}", ctx_prob_max);
+        println!("log_likelihood:{:?}", value.log_likelihoods);
+        // println!("{:?}", value.ctx_move_prob_numerator);
+        // println!("{:?}", ctx_prob_max);
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
-            value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]
+            (value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]).exp() + 1e-10
         });
-        let ctx_move_prob = ctx_move_prob.mapv(|v| v.exp());
+        // println!("{:?}", ctx_move_prob);
         let ctx_prob = ctx_move_prob.sum_axis(Axis(1));
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
             ctx_move_prob[[ctx, state]] / ctx_prob[ctx]
         });
+        // println!("{:?}", ctx_prob);
+        // println!("{:?}", ctx_move_prob);
+
         let move_ctx_emit_max = value
             .move_ctx_emit_prob_numerator
             .axis_iter(Axis(0))
             .map(|arr2d| max_axis_2d(&arr2d.to_owned(), 1))
             .collect::<Vec<_>>();
 
-            assert_eq!(move_ctx_emit_max.len(), NUM_EMIT_STATE);
-            assert_eq!(move_ctx_emit_max[0].shape(), &[NUM_CTX]);
+        assert_eq!(move_ctx_emit_max.len(), NUM_EMIT_STATE);
+        assert_eq!(move_ctx_emit_max[0].shape(), &[NUM_CTX]);
 
         let move_ctx_emit_max = Array2::from_shape_fn((NUM_EMIT_STATE, NUM_CTX), |(state, ctx)| {
             move_ctx_emit_max[state][ctx]
         });
 
+        // println!("{:?}", value.move_ctx_emit_prob_numerator);
+        // println!("{:?}", move_ctx_emit_max);
+
         let move_ctx_emit_prob =
             Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-                value.move_ctx_emit_prob_numerator[[state, ctx, emit]]
-                    - move_ctx_emit_max[[state, ctx]]
+                (value.move_ctx_emit_prob_numerator[[state, ctx, emit]]
+                    - move_ctx_emit_max[[state, ctx]]).exp() + 1e-10
             });
-        let move_ctx_emit_prob = move_ctx_emit_prob.mapv(|v| v.exp());
         let move_ctx_prob = move_ctx_emit_prob.sum_axis(Axis(2));
         let move_ctx_emit_prob =
             Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
@@ -432,75 +325,23 @@ impl HmmBuilder {
 
 #[derive(Debug)]
 pub struct HmmBuilderV2 {
-    ctx_move_prob_numerator: Vec<Vec<Vec<f64>>>, // 16 * 4
-    move_ctx_emit_prob_numerator: Vec<Vec<Vec<Vec<f64>>>>, // 3 * 16 * 64 ?
+    ctx_move_prob_numerator: Array2<f64>,      // 16 * 4
+    move_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
+    ctx_move_flag: Array2<bool>,
+    move_ctx_emit_flag: Array3<bool>,
+    log_likelihoods: Option<f64>
 }
 
 impl HmmBuilderV2 {
     pub fn new() -> Self {
         Self {
-            ctx_move_prob_numerator: vec![vec![vec![]; 4]; 16],
-            move_ctx_emit_prob_numerator: vec![vec![vec![vec![]; 64]; 16]; 3],
-        }
-    }
-
-    pub fn add_to_ctx_move_prob_numerator(&mut self, ctx: u8, movement: TransState, log_prob: f64) {
-        self.ctx_move_prob_numerator[ctx as usize][movement as usize].push(log_prob);
-    }
-
-    pub fn add_to_move_ctx_emit_prob_numerator(
-        &mut self,
-        ctx: u8,
-        movement: TransState,
-        emit: u8,
-        log_prob: f64,
-    ) {
-        assert!((movement as usize) < 3);
-        self.move_ctx_emit_prob_numerator[movement as usize][ctx as usize][emit as usize]
-            .push(log_prob);
-    }
-
-    pub fn merge(&mut self, other: &HmmBuilderV2) {
-        for ctx in 0..NUM_CTX {
-            for state in 0..NUM_STATE {
-                self.ctx_move_prob_numerator[ctx as usize][state as usize]
-                    .extend(other.ctx_move_prob_numerator[ctx as usize][state as usize].iter());
-            }
-        }
-
-        // 3 state for emit
-        for state in 0..NUM_EMIT_STATE {
-            for ctx in 0..NUM_CTX {
-                for emit in 0..NUM_EMIT {
-                    self.move_ctx_emit_prob_numerator[state as usize][ctx as usize][emit as usize]
-                        .extend(
-                            other.move_ctx_emit_prob_numerator[state as usize][ctx as usize]
-                                [emit as usize]
-                                .iter(),
-                        );
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct HmmBuilderV3 {
-    ctx_move_prob_numerator: Array2<f64>,      // 16 * 4
-    move_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
-    ctx_move_flag: Array2<bool>,
-    move_ctx_emit_flag: Array3<bool>,
-}
-
-impl HmmBuilderV3 {
-    pub fn new() -> Self {
-        Self {
-            ctx_move_prob_numerator: Array2::zeros((NUM_CTX, NUM_STATE)),
-            move_ctx_emit_prob_numerator: Array3::zeros((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT)),
+            ctx_move_prob_numerator: Array2::from_elem((NUM_CTX, NUM_STATE), f64::MIN),
+            move_ctx_emit_prob_numerator: Array3::from_elem((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), f64::MIN),
             ctx_move_flag: Array2::from_shape_fn((NUM_CTX, NUM_STATE), |_| false),
             move_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
                 false
             }),
+            log_likelihoods: None
         }
     }
 
@@ -539,7 +380,22 @@ impl HmmBuilderV3 {
         }
     }
 
-    pub fn merge(&mut self, other: &HmmBuilderV3) {
+    pub fn add_log_likehood(&mut self, new_log_prob: f64) {
+
+        if let Some(old_log_prob) = self.log_likelihoods {
+            self.log_likelihoods = Some(stream_acc_log_prob(old_log_prob, new_log_prob));
+        } else {
+            self.log_likelihoods = Some(new_log_prob);
+
+        }
+    }
+
+    pub fn merge(&mut self, other: &HmmBuilderV2) {
+
+        if let Some(new_log_prob) = other.log_likelihoods {
+            self.add_log_likehood(new_log_prob);
+        }
+
         for ctx in 0..NUM_CTX {
             for state in 0..NUM_STATE {
                 if other.ctx_move_flag[[ctx, state]] {
@@ -581,14 +437,13 @@ pub fn stream_acc_log_prob(acc: f64, new_log_prob: f64) -> f64 {
 }
 
 /// log sum exp trick. for list of log probs
-pub fn log_sum_exp(scores: &Vec<f64>) -> f64 {
-    let max_score = scores
-                .iter()
-                .max_by(|&&a, &b| a.partial_cmp(b).unwrap())
-                .copied()
-                .unwrap_or(f64::MIN);
-    let scores = scores.iter().map(|&v| v - max_score).collect::<Vec<_>>();
-    max_score + scores.into_iter().map(|v| v.exp()).sum::<f64>().ln()
+pub fn log_sum_exp(scores: &[f64]) -> f64 {
+    let max_score = scores.iter().cloned().fold(f64::MIN, f64::max);
+    if max_score == f64::MIN {
+        f64::MIN
+    } else {
+        max_score + scores.iter().map(|&x| (x - max_score).exp()).sum::<f64>().ln()
+    }
 }
 
 pub fn max_axis_2d(arr: &Array2<f64>, mut axis: usize) -> Array1<f64> {
@@ -635,10 +490,8 @@ mod test {
 
     #[test]
     fn test_stream_acc_log_prob() {
-
         let v = stream_acc_log_prob(-1.0, -2.0);
         println!("{}", v.exp());
         println!("{}", (-1.0_f64).exp() + (-2.0_f64).exp());
-
     }
 }

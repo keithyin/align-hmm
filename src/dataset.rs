@@ -37,7 +37,7 @@ pub fn align_record_read_worker(
     while let Some(v) = aligned_bam_reader.read(&mut align_record) {
         pbar.lock().unwrap().inc(1);
         cnt += 1;
-        if cnt > 1000 {
+        if cnt > 10000 {
             break;
         }
         if v.is_ok() {

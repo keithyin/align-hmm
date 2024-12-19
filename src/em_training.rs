@@ -7,7 +7,7 @@ use crate::{
     cli::TrainingParams,
     common::{TrainInstance, TransState},
     dataset::{align_record_read_worker, encode_emit, train_instance_worker},
-    hmm_model::{HmmBuilderV3, HmmModel},
+    hmm_model::{HmmBuilderV2, HmmModel},
 };
 use crossbeam::channel;
 use fb::{
@@ -71,7 +71,7 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
             }
             drop(train_ins_receiver);
 
-            let mut final_hmm_builder = HmmBuilderV3::new();
+            let mut final_hmm_builder = HmmBuilderV2::new();
 
             handles.into_iter().for_each(|h| {
                 let hb = h.join().unwrap();
@@ -98,8 +98,8 @@ pub fn train_worker(
     train_ins_receiver: channel::Receiver<TrainInstance>,
     hmm_model: &HmmModel,
     idx: usize,
-) -> HmmBuilderV3 {
-    let mut hmm_builder = HmmBuilderV3::new();
+) -> HmmBuilderV2 {
+    let mut hmm_builder = HmmBuilderV2::new();
     let mut should_print = true;
     for train_ins in train_ins_receiver {
         let rseq = train_ins.ref_aligned_seq().replace('-', "");
@@ -127,7 +127,8 @@ pub fn train_worker(
 
         let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
         let beta_dp = backward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
-
+        hmm_builder.add_log_likehood(beta_dp[[0, 0]]);
+        
         assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
         let mut prev_trans_probs = TemplatePos::default();
