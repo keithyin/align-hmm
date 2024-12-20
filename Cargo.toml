@@ -5,13 +5,13 @@ edition = "2021"
 
 [dependencies]
 ndarray="0.16.1"
-gskits="0.10"
+gskits="0.11"
 clap = {version="4.4", features=["derive"]}
 tracing = "0.1.40"
 tracing-subscriber = {version="0.3.18", features=["json", "env-filter", "fmt", "time", "local-time"]}
 anyhow = "1.0.82"
-mm2="0.15"
-rust-htslib = "0.47.0"
+mm2="0.16"
+rust-htslib = "0.49.0"
 lazy_static="1.5.0"
 num_cpus="1.16.0"
 time = "0.3.34"

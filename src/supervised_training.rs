@@ -11,14 +11,15 @@ use gskits::{
     fastx_reader::{fasta_reader::FastaFileReader, read_fastx},
     pbar::{get_spin_pb, DEFAULT_INTERVAL},
 };
+use ndarray::Array1;
 use rust_htslib::bam::{self, Read};
 
 use crate::{
     cli::TrainingParams,
     common::TransState,
+    dataset::{align_record_read_worker, train_instance_worker},
     em_training::model::{decode_2_bases, decode_emit_base, encode_2_bases},
     hmm_model::HmmModel,
-    dataset::{align_record_read_worker, train_instance_worker},
 };
 
 use crate::common::TrainInstance;
@@ -63,7 +64,7 @@ fn train_model(
         let train_instance = TrainInstance::from_aligned_record_and_ref_seq_and_pin_start_end(
             &align_record,
             refseq,
-            dw_boundaries,
+            Some(dw_boundaries),
         );
         if let Some(train_instance) = &train_instance {
             arrow_hmm.update(&build_train_events(train_instance));
@@ -135,7 +136,7 @@ pub fn train_model_entrance_parallel(params: &TrainingParams) -> HmmModel {
             let record_receiver_ = record_receiver.clone();
             let train_ins_sender_ = train_ins_sender.clone();
             s.spawn(move || {
-                train_instance_worker(dw_boundaries, record_receiver_, train_ins_sender_)
+                train_instance_worker(Some(dw_boundaries), record_receiver_, train_ins_sender_)
             });
         }
         drop(record_receiver);
@@ -255,16 +256,6 @@ pub fn build_train_events(train_instance: &TrainInstance) -> Vec<TrainEvent> {
     let read_seq_bytes = train_instance.read_aligned_seq().as_bytes();
     let dw_features = train_instance.dw();
 
-    // println!(
-    //         "{}\n{}",
-    //         train_instance.ref_aligned_seq(),
-    //         dw_features
-    //             .iter()
-    //             .map(|v| v.map(|v| v.to_string()).unwrap_or("-".to_string()))
-    //             .collect::<Vec<String>>()
-    //             .join("")
-    //     );
-
     let refpos2refpos = train_instance.ref_cur_pos2next_ref();
 
     let mut train_events = vec![];
@@ -350,6 +341,76 @@ pub fn build_train_events(train_instance: &TrainInstance) -> Vec<TrainEvent> {
     }
 
     train_events
+}
+
+pub fn build_train_events_for_stat(train_instance: &TrainInstance) -> HashMap<String, Array1<usize>> {
+    let ref_seq_bytes = train_instance.ref_aligned_seq().as_bytes();
+    let read_seq_bytes = train_instance.read_aligned_seq().as_bytes();
+    let dw_features = train_instance.dw();
+
+    let refpos2refpos = train_instance.ref_cur_pos2next_ref();
+
+    // ref-prebases, pref-curbase, state, emitbase. dw-cnt
+    let mut counter = HashMap::new();
+
+    let mut pre_ref_base = 'A' as u8;
+    for idx in 0..ref_seq_bytes.len() {
+        let cur_ref_base = ref_seq_bytes[idx];
+        let cur_read_base = read_seq_bytes[idx];
+        if idx == 0 {
+            assert!(cur_ref_base != '-' as u8);
+
+            let key = build_key(pre_ref_base, cur_ref_base, TransState::Match, cur_read_base);
+            counter.entry(key).or_insert(Array1::<usize>::from_elem((256,), 0))[dw_features[idx].unwrap() as usize] +=
+                1;
+        } else {
+            match (cur_ref_base as char, cur_read_base as char) {
+                ('-', read_base) => {
+                    // insertion
+                    let read_base = read_base as u8;
+                    let ref_baseidx = refpos2refpos.get(&idx).copied().unwrap();
+                    let ref_base = ref_seq_bytes[ref_baseidx];
+                    assert_ne!(ref_base, '-' as u8, "qname:{}", train_instance.name);
+
+                    let state = if ref_base == read_base {
+                        TransState::Branch
+                    } else {
+                        TransState::Stick
+                    };
+
+                    let key = build_key(pre_ref_base, ref_base, state, read_base);
+                    counter.entry(key).or_insert(Array1::<usize>::from_elem((256,), 0))
+                        [dw_features[idx].unwrap() as usize] += 1;
+                }
+
+                (ref_base, '-') => {
+                    // deletion
+                    let ref_base = ref_base as u8;
+                }
+                (ref_base, read_base) => {
+                    // match
+                    let ref_base = ref_base as u8;
+                    let read_base = read_base as u8;
+
+                    let key = build_key(pre_ref_base, ref_base, TransState::Match, read_base);
+                    counter.entry(key).or_insert(Array1::<usize>::from_elem((256,), 0))
+                        [dw_features[idx].unwrap() as usize] += 1;
+                }
+            }
+        }
+        if cur_ref_base != '-' as u8 {
+            pre_ref_base = cur_ref_base;
+        }
+    }
+
+    counter
+}
+
+fn build_key(ref_pre: u8, ref_cur: u8, state: TransState, emit: u8) -> String {
+    format!(
+        "{}{}:{}:{}",
+        ref_pre as char, ref_cur as char, state, emit as char
+    )
 }
 
 #[cfg(test)]
