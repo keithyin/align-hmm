@@ -180,7 +180,7 @@ pub fn train_with_single_instance(
                         + prev_trans_probs.prob(TransState::Match).ln()
                         + hmm_model
                             .emit_prob(
-                                TransState::Branch,
+                                TransState::Match,
                                 encode_2_bases(prev_tpl_base, cur_tpl_base),
                                 cur_read_base_enc,
                             )
@@ -198,7 +198,7 @@ pub fn train_with_single_instance(
                         + prev_trans_probs.prob(TransState::Match).ln()
                         + hmm_model
                             .emit_prob(
-                                TransState::Branch,
+                                TransState::Match,
                                 encode_2_bases(prev_tpl_base, cur_tpl_base),
                                 cur_read_base_enc,
                             )
