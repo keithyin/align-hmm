@@ -56,6 +56,7 @@ pub fn align_record_read_worker(
             align_record = BamRecord::new();
         }
     }
+    tracing::info!("records in {} are all issued. ", aligned_bam);
 }
 
 pub fn train_instance_worker(
