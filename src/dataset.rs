@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -13,18 +13,46 @@ use rust_htslib::bam::{self, Read};
 
 use crate::common::TrainInstance;
 
+pub fn read_refs(
+    aligned_bams: &Vec<String>,
+    ref_fastas: &Vec<String>,
+) -> HashMap<String, Arc<HashMap<String, Arc<String>>>> {
+    tracing::info!("reading refs....");
+    let fa_name_2_ref_seq = ref_fastas
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<HashSet<_>>()
+        .iter()
+        .map(|fname| {
+            let fasta_rader = FastaFileReader::new(fname.to_string());
+            let refname2refseq = read_fastx(fasta_rader)
+                .into_iter()
+                .map(|read_info| (read_info.name, Arc::new(read_info.seq)))
+                .collect::<HashMap<_, _>>();
+            (fname.to_string(), Arc::new(refname2refseq))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let bam_ref_seqs = aligned_bams
+        .iter()
+        .zip(ref_fastas.iter())
+        .map(|(bam_name, fa_filename)| {
+            
+            (bam_name.to_string(), fa_name_2_ref_seq.get(fa_filename).unwrap().clone())
+        })
+        .collect::<HashMap<_, _>>();
+    tracing::info!("read refs DONE....");
+
+    bam_ref_seqs
+}
+
 pub fn align_record_read_worker(
     aligned_bam: &str,
-    ref_fasta: &str,
+    refname2refseq: &HashMap<String, Arc<String>>,
     pbar: Arc<Mutex<ProgressBar>>,
     sender: channel::Sender<(BamRecord, Arc<String>)>,
 ) {
-    tracing::info!("align_record_read_worker-> aligned_bam:{}, ref_fasta:{}", aligned_bam, ref_fasta);
-    let fasta_rader = FastaFileReader::new(ref_fasta.to_string());
-    let refname2refseq = read_fastx(fasta_rader)
-        .into_iter()
-        .map(|read_info| (read_info.name, Arc::new(read_info.seq)))
-        .collect::<HashMap<_, _>>();
+    tracing::info!("align_record_read_worker-> aligned_bam:{}", aligned_bam,);
 
     let mut aligned_bam_reader = bam::Reader::from_path(aligned_bam).unwrap();
     aligned_bam_reader.set_threads(4).unwrap();
@@ -38,9 +66,9 @@ pub fn align_record_read_worker(
     while let Some(v) = aligned_bam_reader.read(&mut align_record) {
         pbar.lock().unwrap().inc(1);
         cnt += 1;
-        // if cnt > 10000 {
-        //     break;
-        // }
+        if cnt > 1000 {
+            break;
+        }
         if v.is_ok() {
             let tid = align_record.tid();
             if !tid2refname.contains_key(&tid) {

@@ -10,7 +10,7 @@ use std::{
 use crate::{
     cli::TrainingParams,
     common::{TrainInstance, TransState},
-    dataset::{align_record_read_worker, encode_emit, train_instance_worker},
+    dataset::{align_record_read_worker, encode_emit, read_refs, train_instance_worker},
     hmm_model::{HmmBuilderV2, HmmModel},
 };
 use crossbeam::channel;
@@ -27,7 +27,11 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
     let dw_boundaries = &params.parse_dw_boundaries();
     assert!(aligned_bams.len() == ref_fastas.len());
 
+    let bam2refs = read_refs(aligned_bams, ref_fastas);
+
+
     for epoch in 0..1000 {
+        let bam2refs = &bam2refs;
         let pbar = get_spin_pb(
             format!("epoch:{} --> em training...", epoch),
             DEFAULT_INTERVAL,
@@ -36,19 +40,18 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
         let pbar = Arc::new(Mutex::new(pbar));
         let new_hmm_model: HmmModel = thread::scope(|s| {
             let aligned_bams = &params.aligned_bams;
-            let ref_fastas = &params.ref_fas;
             let dw_boundaries = &dw_boundaries;
             let hmm_model_ref = &hmm_model;
 
             let (record_sender, record_receiver) = channel::bounded(1000);
             aligned_bams
                 .iter()
-                .zip(ref_fastas.iter())
-                .for_each(|(aligned_bam, ref_fasta)| {
+              
+                .for_each(|aligned_bam| {
                     let record_sender_ = record_sender.clone();
                     let pbar_ = pbar.clone();
                     s.spawn(move || {
-                        align_record_read_worker(aligned_bam, ref_fasta, pbar_, record_sender_);
+                        align_record_read_worker(aligned_bam, bam2refs.get(aligned_bam).unwrap(), pbar_, record_sender_);
                     });
                 });
             drop(record_sender);
@@ -175,6 +178,13 @@ pub fn train_with_single_instance(
                     cur_read_base_enc,
                     (alpha_dp[[row - 1, col - 1]]
                         + prev_trans_probs.prob(TransState::Match).ln()
+                        + hmm_model
+                            .emit_prob(
+                                TransState::Branch,
+                                encode_2_bases(prev_tpl_base, cur_tpl_base),
+                                cur_read_base_enc,
+                            )
+                            .ln()
                         + beta_dp[[row, col]]),
                 );
             }
@@ -186,6 +196,13 @@ pub fn train_with_single_instance(
                     TransState::Match,
                     (alpha_dp[[row - 1, col - 1]]
                         + prev_trans_probs.prob(TransState::Match).ln()
+                        + hmm_model
+                            .emit_prob(
+                                TransState::Branch,
+                                encode_2_bases(prev_tpl_base, cur_tpl_base),
+                                cur_read_base_enc,
+                            )
+                            .ln()
                         + beta_dp[[row, col]]),
                 );
             }
@@ -202,6 +219,13 @@ pub fn train_with_single_instance(
                         cur_read_base_enc,
                         (alpha_dp[[row - 1, col]]
                             + cur_trans_prob.prob(TransState::Branch).ln()
+                            + hmm_model
+                                .emit_prob(
+                                    TransState::Branch,
+                                    encode_2_bases(cur_tpl_base, next_tpl_base),
+                                    cur_read_base_enc,
+                                )
+                                .ln()
                             + beta_dp[[row, col]]),
                     );
 
@@ -210,6 +234,13 @@ pub fn train_with_single_instance(
                         TransState::Branch,
                         (alpha_dp[[row - 1, col]]
                             + cur_trans_prob.prob(TransState::Branch).ln()
+                            + hmm_model
+                                .emit_prob(
+                                    TransState::Branch,
+                                    encode_2_bases(cur_tpl_base, next_tpl_base),
+                                    cur_read_base_enc,
+                                )
+                                .ln()
                             + beta_dp[[row, col]]),
                     );
                 } else {
@@ -219,6 +250,13 @@ pub fn train_with_single_instance(
                         cur_read_base_enc,
                         (alpha_dp[[row - 1, col]]
                             + cur_trans_prob.prob(TransState::Stick).ln()
+                            + hmm_model
+                                .emit_prob(
+                                    TransState::Stick,
+                                    encode_2_bases(cur_tpl_base, next_tpl_base),
+                                    cur_read_base_enc,
+                                )
+                                .ln()
                             + beta_dp[[row, col]]),
                     );
 
@@ -227,6 +265,13 @@ pub fn train_with_single_instance(
                         TransState::Stick,
                         (alpha_dp[[row - 1, col]]
                             + cur_trans_prob.prob(TransState::Stick).ln()
+                            + hmm_model
+                                .emit_prob(
+                                    TransState::Stick,
+                                    encode_2_bases(cur_tpl_base, next_tpl_base),
+                                    cur_read_base_enc,
+                                )
+                                .ln()
                             + beta_dp[[row, col]]),
                     );
                 }
@@ -277,12 +322,10 @@ mod test {
         for _ in 0..10 {
             let mut hmm_builder = HmmBuilderV2::new();
             for idx in 0..100 {
-                train_with_single_instance(&train_ins, &hmm_model, &mut hmm_builder, idx==0);
+                train_with_single_instance(&train_ins, &hmm_model, &mut hmm_builder, idx == 0);
             }
             hmm_model = (&hmm_builder).into();
             hmm_model.print_params();
         }
-        
-
     }
 }

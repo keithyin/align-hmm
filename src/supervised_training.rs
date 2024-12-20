@@ -17,7 +17,7 @@ use rust_htslib::bam::{self, Read};
 use crate::{
     cli::TrainingParams,
     common::TransState,
-    dataset::{align_record_read_worker, train_instance_worker},
+    dataset::{align_record_read_worker, read_refs, train_instance_worker},
     em_training::model::{decode_2_bases, decode_emit_base, encode_2_bases},
     hmm_model::HmmModel,
 };
@@ -111,21 +111,24 @@ pub fn train_model_entrance_parallel(params: &TrainingParams) -> HmmModel {
     let dw_boundaries = &params.parse_dw_boundaries();
     assert!(aligned_bams.len() == ref_fastas.len());
 
+    let bam2refs = read_refs(aligned_bams, ref_fastas);
+
+
     let pbar = get_spin_pb(format!("training..."), DEFAULT_INTERVAL);
 
     let pbar = Arc::new(Mutex::new(pbar));
 
     let final_hmm_model = thread::scope(|s| {
+        let bam2refs = &bam2refs;
         let (record_sender, record_receiver) = channel::bounded(1000);
-
+        
         aligned_bams
             .iter()
-            .zip(ref_fastas.iter())
-            .for_each(|(aligned_bam, ref_fasta)| {
+            .for_each(|aligned_bam| {
                 let record_sender_ = record_sender.clone();
                 let pbar_ = pbar.clone();
                 s.spawn(move || {
-                    align_record_read_worker(aligned_bam, ref_fasta, pbar_, record_sender_);
+                    align_record_read_worker(aligned_bam, bam2refs.get(aligned_bam).unwrap(), pbar_, record_sender_);
                 });
             });
         drop(record_sender);

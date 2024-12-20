@@ -11,7 +11,7 @@ use ndarray::Array1;
 use crate::{
     cli::TrainingParams,
     common::TrainInstance,
-    dataset::{align_record_read_worker, train_instance_worker},
+    dataset::{align_record_read_worker, read_refs, train_instance_worker},
     supervised_training::build_train_events_for_stat,
 };
 
@@ -24,17 +24,20 @@ pub fn eda_entrance_parallel(params: &TrainingParams) {
 
     let pbar = Arc::new(Mutex::new(pbar));
 
+    let bam2refs = read_refs(aligned_bams, ref_fastas);
+
+
     thread::scope(|s| {
+        let bam2refs = &bam2refs;
         let (record_sender, record_receiver) = channel::bounded(1000);
 
         aligned_bams
             .iter()
-            .zip(ref_fastas.iter())
-            .for_each(|(aligned_bam, ref_fasta)| {
+            .for_each(|aligned_bam| {
                 let record_sender_ = record_sender.clone();
                 let pbar_ = pbar.clone();
                 s.spawn(move || {
-                    align_record_read_worker(aligned_bam, ref_fasta, pbar_, record_sender_);
+                    align_record_read_worker(aligned_bam, bam2refs.get(aligned_bam).unwrap(), pbar_, record_sender_);
                 });
             });
         drop(record_sender);
