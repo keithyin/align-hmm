@@ -12,6 +12,7 @@ use clap::Parser;
 use cli::Subcommands;
 use eda::eda_entrance_parallel;
 use em_training::em_training;
+use hmm_model::HmmModel;
 use hmm_models::{boundaries_4_100, v1};
 use supervised_training::train_model_entrance_parallel;
 use train_data::train_data_main;
@@ -46,7 +47,8 @@ fn main() {
         Subcommands::EmTraining(trainig_param) => {
             // tracing::info!("init hmm model");
             // let init_hmm_model = train_model_entrance_parallel(&trainig_param);
-            let init_hmm_model = boundaries_4_100::get_hmm_model();
+            // let init_hmm_model = boundaries_4_100::get_hmm_model();
+            let init_hmm_model = HmmModel::new_uniform();
             tracing::info!("init hmm model done, start em training");
             em_training(&trainig_param, init_hmm_model);
         }
