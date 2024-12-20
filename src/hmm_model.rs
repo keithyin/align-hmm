@@ -30,6 +30,15 @@ impl HmmModel {
         }
     }
 
+    pub fn new_uniform() -> Self {
+        HmmModel {
+            ctx_trans_cnt: Array2::<usize>::zeros((NUM_CTX, NUM_STATE)), // zeros: no laplace smooth, ones: laplace smooth
+            emission_cnt: Array3::<usize>::ones((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT)),
+            ctx_trans_prob: Array2::<f64>::from_elem((NUM_CTX, NUM_STATE), 1.0 / (NUM_STATE as f64)),
+            emission_prob: Array3::<f64>::from_elem((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), 1.0 / (NUM_EMIT as f64)),
+        }
+    }
+
     pub fn update(&mut self, events: &Vec<TrainEvent>) {
         events.iter().for_each(|&event| match event {
             TrainEvent::EmitEvent(emit) => {
@@ -224,12 +233,14 @@ impl From<&HmmBuilder> for HmmModel {
 
 impl From<&HmmBuilderV2> for HmmModel {
     fn from(value: &HmmBuilderV2) -> Self {
+        let emit_eps = 1e-4;
+        let trans_eps = 1e-3;
         let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
         assert_eq!(ctx_prob_max.shape(), &[NUM_CTX]);
         // println!("{:?}", value.ctx_move_prob_numerator);
         // println!("{:?}", ctx_prob_max);
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
-            (value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]).exp() + 1e-10
+            (value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]).exp() + trans_eps
         });
         // println!("{:?}", ctx_move_prob);
         let ctx_prob = ctx_move_prob.sum_axis(Axis(1));
@@ -258,7 +269,7 @@ impl From<&HmmBuilderV2> for HmmModel {
         let move_ctx_emit_prob =
             Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
                 (value.move_ctx_emit_prob_numerator[[state, ctx, emit]]
-                    - move_ctx_emit_max[[state, ctx]]).exp() + 1e-10
+                    - move_ctx_emit_max[[state, ctx]]).exp() + emit_eps
             });
         let move_ctx_prob = move_ctx_emit_prob.sum_axis(Axis(2));
         let move_ctx_emit_prob =

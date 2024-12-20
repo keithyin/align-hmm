@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fs, path, str::FromStr};
 
 use clap::{self, Args, Parser, Subcommand};
 
@@ -11,6 +11,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum Subcommands {
+    Eda(TrainingParams),
     SupervisedTraining(TrainingParams),
     EmTraining(TrainingParams),
     TrainData(TrainDataParams),
@@ -46,9 +47,30 @@ pub struct TrainDataParams {
     #[arg(long = "ref-fa")]
     pub ref_fa: String,
 
+    #[arg(long="outdir")]
+    pub out_dir: Option<String>,
+
     #[arg(long = "vcf-file")]
     pub vcf_file: Option<String>,
 
     #[arg(long = "bed-file")]
     pub bed_file: Option<String>,
+}
+
+impl TrainDataParams {
+    pub fn get_out_dir(&self) -> String {
+        let out = if let Some(out_dir) = &self.out_dir {
+            out_dir.to_string()
+        } else {
+            let sbr_path = path::Path::new(&self.sbr_bam);
+            sbr_path.parent().map(|v| v.to_string_lossy().into_owned()).unwrap()
+        };
+
+        if !path::Path::new(&out).exists() {
+            fs::create_dir_all(&out).expect(&format!("create dir error: {}", &out));
+        }
+
+        out
+
+    }
 }

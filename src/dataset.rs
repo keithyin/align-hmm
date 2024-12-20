@@ -19,6 +19,7 @@ pub fn align_record_read_worker(
     pbar: Arc<Mutex<ProgressBar>>,
     sender: channel::Sender<(BamRecord, Arc<String>)>,
 ) {
+    tracing::info!("align_record_read_worker-> aligned_bam:{}, ref_fasta:{}", aligned_bam, ref_fasta);
     let fasta_rader = FastaFileReader::new(ref_fasta.to_string());
     let refname2refseq = read_fastx(fasta_rader)
         .into_iter()
@@ -37,9 +38,9 @@ pub fn align_record_read_worker(
     while let Some(v) = aligned_bam_reader.read(&mut align_record) {
         pbar.lock().unwrap().inc(1);
         cnt += 1;
-        if cnt > 10000 {
-            break;
-        }
+        // if cnt > 10000 {
+        //     break;
+        // }
         if v.is_ok() {
             let tid = align_record.tid();
             if !tid2refname.contains_key(&tid) {
@@ -60,7 +61,7 @@ pub fn align_record_read_worker(
 }
 
 pub fn train_instance_worker(
-    dw_boundaries: &Vec<u8>,
+    dw_boundaries: Option<&Vec<u8>>,
     receiver: channel::Receiver<(BamRecord, Arc<String>)>,
     sender: channel::Sender<TrainInstance>,
 ) {

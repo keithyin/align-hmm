@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{cmp, collections::HashMap, fmt::{Debug, Display}};
 
 use bio::alignment::pairwise::Aligner;
 use gskits::{
@@ -61,6 +61,18 @@ impl From<usize> for TransState {
     }
 }
 
+impl Display for TransState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match *self {
+            TransState::Match => "M",
+            TransState::Branch => "B",
+            TransState::Stick => "S",
+            TransState::Dark => "D",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 pub struct TrainInstance {
     pub name: String,
     ref_aligned_seq: String,
@@ -86,7 +98,7 @@ impl TrainInstance {
     pub fn from_aligned_record_and_ref_seq_and_pin_start_end(
         align_record: &bam::Record,
         ref_seq: &str,
-        dw_boundaries: &Vec<u8>,
+        dw_boundaries: Option<&Vec<u8>>,
     ) -> Option<Self> {
         return if !align_record.is_reverse() {
             Some(
@@ -160,7 +172,7 @@ impl TrainInstance {
     fn from_fwd_aligned_record_and_ref_seq(
         align_record: &bam::Record,
         ref_seq: &str,
-        dw_boundaries: &Vec<u8>,
+        dw_boundaries: Option<&Vec<u8>>,
         dw: Option<Vec<u32>>,
     ) -> Self {
         assert!(!align_record.is_reverse());
@@ -222,8 +234,12 @@ impl TrainInstance {
                 let qpos = qpos as usize;
                 read_aligned_seq.push_str(&query_seq[qpos..qpos + 1]);
                 let cur_dw = dw[qpos];
-                let bucket = match dw_boundaries.binary_search(&(cur_dw as u8)) {
-                    Ok(n) | Err(n) => n as u8,
+                let bucket = if let Some(dw_boundaries_) = dw_boundaries {
+                    match dw_boundaries_.binary_search(&(cur_dw as u8)) {
+                        Ok(n) | Err(n) => n as u8,
+                    }
+                } else {
+                    cmp::min(cur_dw, u8::MAX as u32) as u8
                 };
                 dw_features.push(Some(bucket));
             } else {
@@ -484,7 +500,7 @@ mod test {
                     TrainInstance::from_aligned_record_and_ref_seq_and_pin_start_end(
                         &align_record,
                         refseq,
-                        dw_boundaries,
+                        Some(dw_boundaries),
                     )
                     .unwrap();
                 println!("{}", train_instance.ref_aligned_seq());

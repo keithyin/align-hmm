@@ -1,8 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    io::BufReader,
-    process,
+    collections::{HashMap, HashSet}, fs, io::BufReader, path, process
 };
 
 use anyhow::anyhow;
@@ -22,10 +19,11 @@ pub fn train_data_main(params: &TrainDataParams) -> Option<()> {
     let vcf_file = params.vcf_file.as_ref().and_then(|v| Some(v.as_str()));
     // confidence region
     let bed_file = params.bed_file.as_ref().and_then(|v| Some(v.as_str()));
+    let out_dir = params.get_out_dir();
 
     // 1. do alignment
     // let align_res_bam = alignment(subreads_bam, ref_fa, None).unwrap();
-    let align_res_bam = gsmm2_alignment(subreads_bam, ref_fa, None).unwrap();
+    let align_res_bam = gsmm2_alignment(subreads_bam, ref_fa, &out_dir, None).unwrap();
 
     // 2. get whitelist according to vcf, bed, and single mapping
     let whitelist = query_name_whitelist(&align_res_bam, vcf_file, bed_file);
@@ -43,11 +41,15 @@ pub fn train_data_main(params: &TrainDataParams) -> Option<()> {
 fn gsmm2_alignment(
     subreads_bam: &str,
     ref_fa: &str,
+    out_dir: &str,
     threads: Option<usize>,
 ) -> anyhow::Result<String> {
     tracing::info!("do alignment");
     let threads = threads.unwrap_or(num_cpus::get());
-    let o_file_prefix = format!("{}.align4arrow", subreads_bam.rsplit_once(".").unwrap().0);
+
+    let sbr_path = path::Path::new(subreads_bam);
+
+    let o_file_prefix = format!("{}/{}.align4arrow", out_dir, sbr_path.file_stem().map(|v| v.to_string_lossy().into_owned()).unwrap());
     let o_filepath = format!("{o_file_prefix}.bam");
     let mut cmd = process::Command::new("gsmm2");
     cmd.args([
@@ -63,6 +65,8 @@ fn gsmm2_alignment(
         "-p",
         o_file_prefix.as_str(),
         "--noMar",
+        "--oupIyT", "0.8",
+        "--oupCovT", "0.7"
     ]);
 
     let status = cmd.status()?;
