@@ -29,7 +29,6 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
 
     let bam2refs = read_refs(aligned_bams, ref_fastas);
 
-
     for epoch in 0..1000 {
         let bam2refs = &bam2refs;
         let pbar = get_spin_pb(
@@ -44,16 +43,18 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
             let hmm_model_ref = &hmm_model;
 
             let (record_sender, record_receiver) = channel::bounded(1000);
-            aligned_bams
-                .iter()
-              
-                .for_each(|aligned_bam| {
-                    let record_sender_ = record_sender.clone();
-                    let pbar_ = pbar.clone();
-                    s.spawn(move || {
-                        align_record_read_worker(aligned_bam, bam2refs.get(aligned_bam).unwrap(), pbar_, record_sender_);
-                    });
+            aligned_bams.iter().for_each(|aligned_bam| {
+                let record_sender_ = record_sender.clone();
+                let pbar_ = pbar.clone();
+                s.spawn(move || {
+                    align_record_read_worker(
+                        aligned_bam,
+                        bam2refs.get(aligned_bam).unwrap(),
+                        pbar_,
+                        record_sender_,
+                    );
                 });
+            });
             drop(record_sender);
             drop(pbar);
 
@@ -299,7 +300,15 @@ pub fn train_with_single_instance(
         encode_2_bases(prev_tpl_base, cur_tpl_base),
         TransState::Match,
         cur_base_enc,
-        (alpha_dp[[tot_row - 2, tot_col - 2]] + beta_dp[[tot_row - 1, tot_col - 1]]),
+        (alpha_dp[[tot_row - 2, tot_col - 2]]
+            + beta_dp[[tot_row - 1, tot_col - 1]]
+            + hmm_model
+                .emit_prob(
+                    TransState::Match,
+                    encode_2_bases(prev_tpl_base, cur_tpl_base),
+                    cur_base_enc,
+                )
+                .ln()),
     );
 }
 
