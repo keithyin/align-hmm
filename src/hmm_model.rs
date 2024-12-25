@@ -114,6 +114,11 @@ impl HmmModel {
         }
     }
 
+    pub fn emit_ln_prob(&self, movement: TransState, ctx: u8, emit: u8) -> f64 {
+        self.emit_prob(movement, ctx, emit).ln()
+    }
+    
+
     pub fn ctx_state(&self, ctx: u8, movement: TransState) -> f64 {
         let prob = self.ctx_trans_prob[[ctx as usize, movement as usize]];
         if prob < 1e-10 {

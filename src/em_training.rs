@@ -14,10 +14,8 @@ use crate::{
     hmm_model::{HmmBuilderV2, HmmModel},
 };
 use crossbeam::channel;
-use fb::{
-    backward, backward_with_log_sum_exp_trick, forward, forward_with_log_sum_exp_trick,
-    veterbi_decode,
-};
+use fb::veterbi_decode;
+use fb_v2::{forward_with_log_sum_exp_trick, backward_with_log_sum_exp_trick};
 use gskits::pbar::{get_spin_pb, DEFAULT_INTERVAL};
 use model::{decode_emit_base, encode_2_bases, Template, TemplatePos};
 
@@ -178,14 +176,13 @@ pub fn train_with_single_instance(
                     TransState::Match,
                     cur_read_base_enc,
                     (alpha_dp[[row - 1, col - 1]]
-                        + prev_trans_probs.prob(TransState::Match).ln()
+                        + prev_trans_probs.ln_prob(TransState::Match)
                         + hmm_model
-                            .emit_prob(
+                            .emit_ln_prob(
                                 TransState::Match,
                                 encode_2_bases(prev_tpl_base, cur_tpl_base),
                                 cur_read_base_enc,
                             )
-                            .ln()
                         + beta_dp[[row, col]]),
                 );
             }
@@ -196,14 +193,13 @@ pub fn train_with_single_instance(
                     encode_2_bases(prev_tpl_base, cur_tpl_base),
                     TransState::Match,
                     (alpha_dp[[row - 1, col - 1]]
-                        + prev_trans_probs.prob(TransState::Match).ln()
+                        + prev_trans_probs.ln_prob(TransState::Match)
                         + hmm_model
-                            .emit_prob(
+                            .emit_ln_prob(
                                 TransState::Match,
                                 encode_2_bases(prev_tpl_base, cur_tpl_base),
                                 cur_read_base_enc,
                             )
-                            .ln()
                         + beta_dp[[row, col]]),
                 );
             }
@@ -219,14 +215,13 @@ pub fn train_with_single_instance(
                         TransState::Branch,
                         cur_read_base_enc,
                         (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.prob(TransState::Branch).ln()
+                            + cur_trans_prob.ln_prob(TransState::Branch)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Branch,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                             + beta_dp[[row, col]]),
                     );
 
@@ -234,14 +229,13 @@ pub fn train_with_single_instance(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Branch,
                         (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.prob(TransState::Branch).ln()
+                            + cur_trans_prob.ln_prob(TransState::Branch)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Branch,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                             + beta_dp[[row, col]]),
                     );
                 } else {
@@ -250,14 +244,13 @@ pub fn train_with_single_instance(
                         TransState::Stick,
                         cur_read_base_enc,
                         (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.prob(TransState::Stick).ln()
+                            + cur_trans_prob.ln_prob(TransState::Stick)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Stick,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                             + beta_dp[[row, col]]),
                     );
 
@@ -265,14 +258,13 @@ pub fn train_with_single_instance(
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         TransState::Stick,
                         (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.prob(TransState::Stick).ln()
+                            + cur_trans_prob.ln_prob(TransState::Stick)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Stick,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                             + beta_dp[[row, col]]),
                     );
                 }
@@ -283,7 +275,7 @@ pub fn train_with_single_instance(
                     encode_2_bases(prev_tpl_base, cur_tpl_base),
                     TransState::Dark,
                     (alpha_dp[[row, col - 1]]
-                        + prev_trans_probs.prob(TransState::Dark).ln()
+                        + prev_trans_probs.ln_prob(TransState::Dark)
                         + beta_dp[[row, col]]),
                 );
             }
@@ -303,12 +295,11 @@ pub fn train_with_single_instance(
         (alpha_dp[[tot_row - 2, tot_col - 2]]
             + beta_dp[[tot_row - 1, tot_col - 1]]
             + hmm_model
-                .emit_prob(
+                .emit_ln_prob(
                     TransState::Match,
                     encode_2_bases(prev_tpl_base, cur_tpl_base),
                     cur_base_enc,
-                )
-                .ln()),
+                )),
     );
 }
 

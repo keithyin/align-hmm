@@ -61,6 +61,10 @@ impl TemplatePos {
             prob
         }
     }
+
+    pub fn ln_prob(&self, state: TransState) -> f64 {
+        self.prob(state).ln()
+    }
 }
 
 impl Default for TemplatePos {

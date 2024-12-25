@@ -33,14 +33,13 @@ pub fn forward_with_log_sum_exp_trick(
 
             if (row > 1 && col > 1) || (row == 1 && col == 1) {
                 let this_move_score = dp_matrix[[row - 1, col - 1]]
-                    + prev_trans_probs.prob(TransState::Match).ln()
+                    + prev_trans_probs.ln_prob(TransState::Match)
                     + hmm_model
-                        .emit_prob(
+                        .emit_ln_prob(
                             TransState::Match,
                             encode_2_bases(prev_tpl_base, cur_tpl_base),
                             cur_read_base_enc,
-                        )
-                        .ln();
+                        );
                 scores.push(this_move_score);
             }
 
@@ -52,24 +51,22 @@ pub fn forward_with_log_sum_exp_trick(
                 let this_move_score =
                     if decode_emit_base(cur_read_base_enc).as_bytes()[1] == next_tpl_base {
                         dp_matrix[[row - 1, col]]
-                            + cur_trans_probs.prob(TransState::Branch).ln()
+                            + cur_trans_probs.ln_prob(TransState::Branch)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Branch,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                     } else {
                         dp_matrix[[row - 1, col]]
-                            + cur_trans_probs.prob(TransState::Stick).ln()
+                            + cur_trans_probs.ln_prob(TransState::Stick)
                             + hmm_model
-                                .emit_prob(
+                                .emit_ln_prob(
                                     TransState::Stick,
                                     encode_2_bases(cur_tpl_base, next_tpl_base),
                                     cur_read_base_enc,
                                 )
-                                .ln()
                     };
 
                 scores.push(this_move_score);
@@ -78,8 +75,8 @@ pub fn forward_with_log_sum_exp_trick(
             if col > 1 {
                 // dark here
                 let this_move_score =
-                    dp_matrix[[row, col - 1]] + prev_trans_probs.prob(TransState::Dark).ln();
-                // println!("row:{}, col:{}, prev_score:{}, this_move:{}, score:{}", row, col, dp_matrix[[row, col - 1]], prev_trans_probs.prob(TransState::Dark).ln(), this_move_score);
+                    dp_matrix[[row, col - 1]] + prev_trans_probs.ln_prob(TransState::Dark);
+                // println!("row:{}, col:{}, prev_score:{}, this_move:{}, score:{}", row, col, dp_matrix[[row, col - 1]], prev_trans_probs.ln_prob(TransState::Dark).ln(), this_move_score);
                 scores.push(this_move_score);
             }
 
@@ -93,12 +90,11 @@ pub fn forward_with_log_sum_exp_trick(
     let cur_tpl_base = template.last().unwrap().base();
     dp_matrix[[dp_rows - 1, dp_cols - 1]] = dp_matrix[[dp_rows - 2, dp_cols - 2]]
         + hmm_model
-            .emit_prob(
+            .emit_ln_prob(
                 TransState::Match,
                 encode_2_bases(prev_tpl_base, cur_tpl_base),
                 *encoded_query.last().unwrap(),
-            )
-            .ln();
+            );
 
     dp_matrix
 }
@@ -127,48 +123,44 @@ pub fn backward_with_log_sum_exp_trick(
             // match
             if (row + 1) == (dp_rows - 1) && (col + 1) == (dp_cols - 1) {
                 let this_move_score = hmm_model
-                    .emit_prob(
+                    .emit_ln_prob(
                         TransState::Match,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         next_read_base_enc,
                     )
-                    .ln()
                     + dp_matrix[[row + 1, col + 1]];
                 scores.push(this_move_score);
             } else if (row + 1) < (dp_rows - 1) && (col + 1) < (dp_cols - 1) {
-                let this_move_score = cur_trans_probs.prob(TransState::Match).ln()
+                let this_move_score = cur_trans_probs.ln_prob(TransState::Match)
                     + hmm_model
-                        .emit_prob(
+                        .emit_ln_prob(
                             TransState::Match,
                             encode_2_bases(cur_tpl_base, next_tpl_base),
                             next_read_base_enc,
                         )
-                        .ln()
                     + dp_matrix[[row + 1, col + 1]];
                 scores.push(this_move_score);
             }
 
             if row < (dp_rows - 2) {
                 // ins here
-                let this_move_score = if decode_emit_base(next_read_base_enc).as_bytes()[0] == next_tpl_base {
-                    cur_trans_probs.prob(TransState::Branch).ln()
+                let this_move_score = if decode_emit_base(next_read_base_enc).as_bytes()[1] == next_tpl_base {
+                    cur_trans_probs.ln_prob(TransState::Branch)
                     + hmm_model
-                        .emit_prob(
+                        .emit_ln_prob(
                             TransState::Branch,
                             encode_2_bases(cur_tpl_base, next_tpl_base),
                             next_read_base_enc,
                         )
-                        .ln()
                     + dp_matrix[[row + 1, col]]
                 } else {
-                    cur_trans_probs.prob(TransState::Stick).ln()
+                    cur_trans_probs.ln_prob(TransState::Stick)
                     + hmm_model
-                        .emit_prob(
+                        .emit_ln_prob(
                             TransState::Stick,
                             encode_2_bases(cur_tpl_base, next_tpl_base),
                             next_read_base_enc,
                         )
-                        .ln()
                     + dp_matrix[[row + 1, col]]
                 };
 
@@ -178,7 +170,7 @@ pub fn backward_with_log_sum_exp_trick(
             if col < (dp_cols - 2) {
                 // dark here
                 let this_move_score =
-                    cur_trans_probs.prob(TransState::Dark).ln() + dp_matrix[[row, col + 1]];
+                    cur_trans_probs.ln_prob(TransState::Dark) + dp_matrix[[row, col + 1]];
                 scores.push(this_move_score);
             }
 
@@ -188,12 +180,11 @@ pub fn backward_with_log_sum_exp_trick(
     let default_tpl_pos = TemplatePos::default();
     let default_tpl_base = default_tpl_pos.base();
     dp_matrix[[0, 0]] = hmm_model
-        .emit_prob(
+        .emit_ln_prob(
             TransState::Match,
             encode_2_bases(default_tpl_base, template.first().unwrap().base()),
             *encoded_query.first().unwrap(),
         )
-        .ln()
         + dp_matrix[[1, 1]];
 
     dp_matrix
@@ -202,6 +193,8 @@ pub fn backward_with_log_sum_exp_trick(
 
 #[cfg(test)]
 mod test {
+
+    use gskits::file_reader::bed_reader::BedRowData;
 
     use crate::{
         dataset::encode_emit,
@@ -248,6 +241,21 @@ mod test {
 
     #[test]
     fn test_forward_backward_2() {
+        let hmm_model = v1::get_hmm_model();
+
+        let templates = b"CCGAACTAGTCTCAGGCTTCAACATCGAATACGCCGCAGGCCCCTTCGCCCTATTCTTCATAGCCGAATACACAAACATTATTATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATAACGCACTCTCCCCTGAACTCTACACAACATATTTTGTCACCAAGACCCTACTTCTGACCTCCCTGTTCTTATGAATTCGAACAGCATACCCCCGATTCCGC";
+        let query = "GGGAGCCGAACTAGTCTCAGGCTTCACATCGAGTTTCCCGCAGCCTTCGCCCTATCTTCCATAGCCGAATACACAAACATATATAATAAACACCCTCACCACTACAATCTTCCTAGGAACAACATATGACGCACTCTCCCCTGAACTCCTACACAACATATTTTGTCACCAAGACCCTACTTCTAACCTCCCTGTTCTTATAATTCGAACAGCATCACCCCCGATTCCGC";
+        let encoded_emit = encode_emit(&vec![0; 230], query);
+        let templates = Template::from_template_bases(templates, &hmm_model);
+        let alpha = forward_with_log_sum_exp_trick(&encoded_emit, &templates, &hmm_model);
+        let beta = backward_with_log_sum_exp_trick(&encoded_emit, &templates, &hmm_model);
+        println!("{:?}", alpha);
+        println!("");
+        println!("{:?}", beta);
+    }
+
+    #[test]
+    fn test_veterbi_decode() {
         let hmm_model = v1::get_hmm_model();
 
         let query_bases = vec![0, 1, 2, 3];
