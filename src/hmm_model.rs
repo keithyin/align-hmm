@@ -128,18 +128,6 @@ impl HmmModel {
         }
     }
 
-    pub fn delta(&self, other: &HmmModel) -> f64 {
-        let emit_prob_delta = (self.emission_prob.clone() - other.emission_prob.clone())
-            .abs()
-            .mean()
-            .unwrap();
-        let trans_delta = (self.ctx_trans_prob.clone() - other.ctx_trans_prob.clone())
-            .abs()
-            .mean()
-            .unwrap();
-        emit_prob_delta + trans_delta
-    }
-
     pub fn cnt_merge(&mut self, other: &HmmModel) {
         for state_idx in 0..NUM_EMIT_STATE {
             for ctx_idx in 0..NUM_CTX {
@@ -287,6 +275,29 @@ impl From<&HmmBuilderV2> for HmmModel {
         default_model.set_ctx_trans_prob(ctx_move_prob);
         default_model
     }
+
+    // fn from(value: &HmmBuilderV2) -> Self {
+       
+    //     let ctx_move_energy = value.ctx_move_prob_numerator.mapv(|v| v.exp());
+    //     // println!("{:?}", ctx_move_prob);
+    //     let ctx_prob = ctx_move_energy.sum_axis(Axis(1));
+    //     let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
+    //         ctx_move_energy[[ctx, state]] / ctx_prob[ctx]
+    //     });
+
+    //     let move_ctx_emit_energy = value.move_ctx_emit_prob_numerator.mapv(|v| v.exp());
+        
+    //     let move_ctx_prob = move_ctx_emit_energy.sum_axis(Axis(2));
+    //     let move_ctx_emit_prob =
+    //         Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
+    //             move_ctx_emit_energy[[state, ctx, emit]] / move_ctx_prob[[state, ctx]]
+    //         });
+
+    //     let mut default_model = Self::new();
+    //     default_model.set_emission_prob(move_ctx_emit_prob);
+    //     default_model.set_ctx_trans_prob(ctx_move_prob);
+    //     default_model
+    // }
 }
 
 #[derive(Debug)]
@@ -344,7 +355,8 @@ pub struct HmmBuilderV2 {
     move_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
     ctx_move_flag: Array2<bool>,
     move_ctx_emit_flag: Array3<bool>,
-    log_likelihoods: Option<f64>
+    log_likelihoods: Option<f64>,
+    num_observations: usize
 }
 
 impl HmmBuilderV2 {
@@ -356,7 +368,8 @@ impl HmmBuilderV2 {
             move_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
                 false
             }),
-            log_likelihoods: None
+            log_likelihoods: None,
+            num_observations: 0,
         }
     }
 
@@ -395,20 +408,20 @@ impl HmmBuilderV2 {
         }
     }
 
-    pub fn add_log_likehood(&mut self, new_log_prob: f64) {
+    pub fn add_log_likehood(&mut self, new_log_prob: f64, num: usize) {
 
         if let Some(old_log_prob) = self.log_likelihoods {
-            self.log_likelihoods = Some(stream_acc_log_prob(old_log_prob, new_log_prob));
+            self.log_likelihoods = Some(old_log_prob + new_log_prob)
         } else {
             self.log_likelihoods = Some(new_log_prob);
-
         }
+        self.num_observations += num;
     }
 
     pub fn merge(&mut self, other: &HmmBuilderV2) {
 
         if let Some(new_log_prob) = other.log_likelihoods {
-            self.add_log_likehood(new_log_prob);
+            self.add_log_likehood(new_log_prob, other.num_observations);
         }
 
         for ctx in 0..NUM_CTX {
@@ -441,7 +454,7 @@ impl HmmBuilderV2 {
     }
 
     pub fn get_log_likelihood(&self) -> Option<f64> {
-        self.log_likelihoods
+        self.log_likelihoods.map(|v| v / (self.num_observations as f64))
     }
 }
 
@@ -494,7 +507,24 @@ mod test {
     #[test]
     fn test_builder_v2() {
         let mut builder = HmmBuilderV2::new();
-        builder.add_to_ctx_move_prob_numerator(0, crate::common::TransState::Match, -2.0);
+
+        for i in 0..16 {
+            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Match, -2.0);
+            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Stick, -2.0);
+            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Branch, -2.0);
+            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Dark, -2.0);
+            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Dark, -2.0);
+        }
+        for ctx in 0..16 {
+            for state in 0..3 {
+                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 0, -2.0);
+                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 1, -2.0);
+                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
+                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
+                
+            }
+        }
+        
 
         let hmm_model: HmmModel = (&builder).into();
         println!("{:?}", hmm_model);

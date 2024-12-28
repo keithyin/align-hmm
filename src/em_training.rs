@@ -27,6 +27,8 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
 
     let bam2refs = read_refs(aligned_bams, ref_fastas);
 
+    let mut last_ll: Option<f64> = None;
+
     for epoch in 0..1000 {
         let bam2refs = &bam2refs;
         let pbar = get_spin_pb(
@@ -35,7 +37,7 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
         );
 
         let pbar = Arc::new(Mutex::new(pbar));
-        let new_hmm_model: HmmModel = thread::scope(|s| {
+        let (new_hmm_model, finished): (HmmModel, bool) = thread::scope(|s| {
             let aligned_bams = &params.aligned_bams;
             let dw_boundaries = &dw_boundaries;
             let hmm_model_ref = &hmm_model;
@@ -81,24 +83,33 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
                 let hb = h.join().unwrap();
                 final_hmm_builder.merge(&hb);
             });
+            let cur_ll = final_hmm_builder.get_log_likelihood().unwrap();
 
             tracing::info!(
-                "epoch:{}, log_likelihood:{:?}",
-                epoch,
-                final_hmm_builder.get_log_likelihood()
+                "epoch:{}, pre_log_likelihood:{:?}, cur_log_likelihood:{}", epoch, last_ll, cur_ll
             );
 
-            (&final_hmm_builder).into()
+            let mut finished = false;
+            if let Some(last_ll_) = last_ll {
+                let delta = (cur_ll - last_ll_).abs();
+                if  delta < 1e-6 {
+                    finished = true;
+                }
+                last_ll = Some(cur_ll);
+                
+            } else {
+                last_ll = Some(cur_ll);
+            }
+
+            let new_hmm_model = (&final_hmm_builder).into();
+            (new_hmm_model, finished)
         });
 
-        tracing::info!("compute delta");
-        let delta = hmm_model.delta(&new_hmm_model);
-        if delta < 1e-6 {
+        if finished {
             new_hmm_model.dump_to_file(&format!("arrow_hg002.em-epoch-{}.params", epoch));
             println!("DONE!!!!");
             break;
         } else {
-            println!("epoch:{}, delta:{}", epoch, delta);
             new_hmm_model.dump_to_file(&format!("arrow_hg002.em-epoch-{}.params", epoch));
         }
         hmm_model = new_hmm_model;
@@ -155,7 +166,7 @@ pub fn train_with_single_instance(
 
     let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
     let beta_dp = backward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
-    hmm_builder.add_log_likehood(beta_dp[[0, 0]]);
+    hmm_builder.add_log_likehood(beta_dp[[0, 0]], 1);
 
     assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
