@@ -244,7 +244,7 @@ impl From<&HmmBuilderV2> for HmmModel {
         // println!("{:?}", ctx_move_prob);
 
         let move_ctx_emit_max = value
-            .move_ctx_emit_prob_numerator
+            .state_ctx_emit_prob_numerator
             .axis_iter(Axis(0))
             .map(|arr2d| max_axis_2d(&arr2d.to_owned(), 1))
             .collect::<Vec<_>>();
@@ -261,7 +261,7 @@ impl From<&HmmBuilderV2> for HmmModel {
 
         let move_ctx_emit_prob =
             Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |(state, ctx, emit)| {
-                (value.move_ctx_emit_prob_numerator[[state, ctx, emit]]
+                (value.state_ctx_emit_prob_numerator[[state, ctx, emit]]
                     - move_ctx_emit_max[[state, ctx]]).exp() + emit_eps
             });
         let move_ctx_prob = move_ctx_emit_prob.sum_axis(Axis(2));
@@ -352,7 +352,7 @@ impl HmmBuilder {
 #[derive(Debug)]
 pub struct HmmBuilderV2 {
     ctx_move_prob_numerator: Array2<f64>,      // 16 * 4
-    move_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
+    state_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
     ctx_move_flag: Array2<bool>,
     move_ctx_emit_flag: Array3<bool>,
     log_likelihoods: Option<f64>,
@@ -363,7 +363,7 @@ impl HmmBuilderV2 {
     pub fn new() -> Self {
         Self {
             ctx_move_prob_numerator: Array2::from_elem((NUM_CTX, NUM_STATE), f64::MIN),
-            move_ctx_emit_prob_numerator: Array3::from_elem((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), f64::MIN),
+            state_ctx_emit_prob_numerator: Array3::from_elem((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), f64::MIN),
             ctx_move_flag: Array2::from_shape_fn((NUM_CTX, NUM_STATE), |_| false),
             move_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
                 false
@@ -373,36 +373,36 @@ impl HmmBuilderV2 {
         }
     }
 
-    pub fn add_to_ctx_move_prob_numerator(&mut self, ctx: u8, movement: TransState, log_prob: f64) {
-        if !self.ctx_move_flag[[ctx as usize, movement as usize]] {
-            self.ctx_move_prob_numerator[[ctx as usize, movement as usize]] = log_prob;
-            self.ctx_move_flag[[ctx as usize, movement as usize]] = true;
+    pub fn add_to_ctx_state_prob_numerator(&mut self, ctx: u8, state: TransState, log_prob: f64) {
+        if !self.ctx_move_flag[[ctx as usize, state as usize]] {
+            self.ctx_move_prob_numerator[[ctx as usize, state as usize]] = log_prob;
+            self.ctx_move_flag[[ctx as usize, state as usize]] = true;
         } else {
-            self.ctx_move_prob_numerator[[ctx as usize, movement as usize]] = stream_acc_log_prob(
-                self.ctx_move_prob_numerator[[ctx as usize, movement as usize]],
+            self.ctx_move_prob_numerator[[ctx as usize, state as usize]] = stream_acc_log_prob(
+                self.ctx_move_prob_numerator[[ctx as usize, state as usize]],
                 log_prob,
             );
         }
     }
 
-    pub fn add_to_move_ctx_emit_prob_numerator(
+    pub fn add_to_state_ctx_emit_prob_numerator(
         &mut self,
         ctx: u8,
-        movement: TransState,
+        state: TransState,
         emit: u8,
         log_prob: f64,
     ) {
-        assert!((movement as usize) < 3);
+        assert!((state as usize) < 3);
 
-        if !self.move_ctx_emit_flag[[movement as usize, ctx as usize, emit as usize]] {
-            self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
+        if !self.move_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] {
+            self.state_ctx_emit_prob_numerator[[state as usize, ctx as usize, emit as usize]] =
                 log_prob;
-            self.move_ctx_emit_flag[[movement as usize, ctx as usize, emit as usize]] = true;
+            self.move_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] = true;
         } else {
-            self.move_ctx_emit_prob_numerator[[movement as usize, ctx as usize, emit as usize]] =
+            self.state_ctx_emit_prob_numerator[[state as usize, ctx as usize, emit as usize]] =
                 stream_acc_log_prob(
-                    self.move_ctx_emit_prob_numerator
-                        [[movement as usize, ctx as usize, emit as usize]],
+                    self.state_ctx_emit_prob_numerator
+                        [[state as usize, ctx as usize, emit as usize]],
                     log_prob,
                 );
         }
@@ -427,7 +427,7 @@ impl HmmBuilderV2 {
         for ctx in 0..NUM_CTX {
             for state in 0..NUM_STATE {
                 if other.ctx_move_flag[[ctx, state]] {
-                    self.add_to_ctx_move_prob_numerator(
+                    self.add_to_ctx_state_prob_numerator(
                         ctx as u8,
                         state.into(),
                         other.ctx_move_prob_numerator[[ctx, state]],
@@ -441,11 +441,11 @@ impl HmmBuilderV2 {
             for ctx in 0..NUM_CTX {
                 for emit in 0..NUM_EMIT {
                     if other.move_ctx_emit_flag[[state, ctx, emit]] {
-                        self.add_to_move_ctx_emit_prob_numerator(
+                        self.add_to_state_ctx_emit_prob_numerator(
                             ctx as u8,
                             state.into(),
                             emit as u8,
-                            other.move_ctx_emit_prob_numerator[[state, ctx, emit]],
+                            other.state_ctx_emit_prob_numerator[[state, ctx, emit]],
                         );
                     }
                 }
@@ -509,18 +509,18 @@ mod test {
         let mut builder = HmmBuilderV2::new();
 
         for i in 0..16 {
-            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Match, -2.0);
-            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Stick, -2.0);
-            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Branch, -2.0);
-            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Dark, -2.0);
-            builder.add_to_ctx_move_prob_numerator(i, crate::common::TransState::Dark, -2.0);
+            builder.add_to_ctx_state_prob_numerator(i, crate::common::TransState::Match, -2.0);
+            builder.add_to_ctx_state_prob_numerator(i, crate::common::TransState::Stick, -2.0);
+            builder.add_to_ctx_state_prob_numerator(i, crate::common::TransState::Branch, -2.0);
+            builder.add_to_ctx_state_prob_numerator(i, crate::common::TransState::Dark, -2.0);
+            builder.add_to_ctx_state_prob_numerator(i, crate::common::TransState::Dark, -2.0);
         }
         for ctx in 0..16 {
             for state in 0..3 {
-                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 0, -2.0);
-                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 1, -2.0);
-                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
-                builder.add_to_move_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
+                builder.add_to_state_ctx_emit_prob_numerator(ctx, state.into(), 0, -2.0);
+                builder.add_to_state_ctx_emit_prob_numerator(ctx, state.into(), 1, -2.0);
+                builder.add_to_state_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
+                builder.add_to_state_ctx_emit_prob_numerator(ctx, state.into(), 2, -2.0);
                 
             }
         }

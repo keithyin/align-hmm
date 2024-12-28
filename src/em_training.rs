@@ -15,7 +15,7 @@ use crate::{
 };
 use crossbeam::channel;
 use fb::veterbi_decode;
-use fb_v2::{forward_with_log_sum_exp_trick, backward_with_log_sum_exp_trick};
+use fb_v2::{backward_with_log_sum_exp_trick, forward_with_log_sum_exp_trick};
 use gskits::pbar::{get_spin_pb, DEFAULT_INTERVAL};
 use model::{decode_emit_base, encode_2_bases, Template, TemplatePos};
 
@@ -86,17 +86,20 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
             let cur_ll = final_hmm_builder.get_log_likelihood().unwrap();
 
             tracing::info!(
-                "epoch:{}, pre_log_likelihood:{:?}, cur_log_likelihood:{}", epoch, last_ll, cur_ll
+                "epoch:{}, pre_log_likelihood:{:?}, cur_log_likelihood:{}",
+                epoch,
+                last_ll,
+                cur_ll
             );
 
             let mut finished = false;
             if let Some(last_ll_) = last_ll {
                 let delta = (cur_ll - last_ll_).abs();
-                if  delta < 1e-6 {
+                tracing::info!("epoch:{}, delta:{}", epoch, delta);
+                if delta < 1e-6 {
                     finished = true;
                 }
                 last_ll = Some(cur_ll);
-                
             } else {
                 last_ll = Some(cur_ll);
             }
@@ -180,114 +183,77 @@ pub fn train_with_single_instance(
             let cur_read_base_enc = encoded_emit[row - 1];
             // for row1 col1, only match trans to this
 
-            if (row > 1 && col > 1) && (row == 1 && col == 1) {
+            if (row > 1 && col > 1) || (row == 1 && col == 1) {
                 // match, update emission
-                hmm_builder.add_to_move_ctx_emit_prob_numerator(
-                    encode_2_bases(prev_tpl_base, cur_tpl_base),
+                let ctx = encode_2_bases(prev_tpl_base, cur_tpl_base);
+                let log_prob = alpha_dp[[row - 1, col - 1]]
+                    + prev_trans_probs.ln_prob(TransState::Match)
+                    + hmm_model.emit_ln_prob(TransState::Match, ctx, cur_read_base_enc)
+                    + beta_dp[[row, col]];
+                hmm_builder.add_to_state_ctx_emit_prob_numerator(
+                    ctx,
                     TransState::Match,
                     cur_read_base_enc,
-                    (alpha_dp[[row - 1, col - 1]]
-                        + prev_trans_probs.ln_prob(TransState::Match)
-                        + hmm_model
-                            .emit_ln_prob(
-                                TransState::Match,
-                                encode_2_bases(prev_tpl_base, cur_tpl_base),
-                                cur_read_base_enc,
-                            )
-                        + beta_dp[[row, col]]),
+                    log_prob,
                 );
             }
 
             if row > 1 && col > 1 {
                 // match, update state
-                hmm_builder.add_to_ctx_move_prob_numerator(
-                    encode_2_bases(prev_tpl_base, cur_tpl_base),
-                    TransState::Match,
-                    (alpha_dp[[row - 1, col - 1]]
-                        + prev_trans_probs.ln_prob(TransState::Match)
-                        + hmm_model
-                            .emit_ln_prob(
-                                TransState::Match,
-                                encode_2_bases(prev_tpl_base, cur_tpl_base),
-                                cur_read_base_enc,
-                            )
-                        + beta_dp[[row, col]]),
-                );
+                let ctx = encode_2_bases(prev_tpl_base, cur_tpl_base);
+
+                let log_prob = alpha_dp[[row - 1, col - 1]]
+                    + prev_trans_probs.ln_prob(TransState::Match)
+                    + hmm_model.emit_ln_prob(TransState::Match, ctx, cur_read_base_enc)
+                    + beta_dp[[row, col]];
+
+                hmm_builder.add_to_ctx_state_prob_numerator(ctx, TransState::Match, log_prob);
             }
 
             if row > 1 {
                 // insertion
                 let next_trans_probs = tpl[col];
                 let next_tpl_base = next_trans_probs.base();
+                let ctx = encode_2_bases(cur_tpl_base, next_tpl_base);
 
                 if decode_emit_base(cur_read_base_enc).as_bytes()[1] == next_tpl_base {
-                    hmm_builder.add_to_move_ctx_emit_prob_numerator(
-                        encode_2_bases(cur_tpl_base, next_tpl_base),
+                    let log_prob = alpha_dp[[row - 1, col]]
+                        + cur_trans_prob.ln_prob(TransState::Branch)
+                        + hmm_model.emit_ln_prob(TransState::Branch, ctx, cur_read_base_enc)
+                        + beta_dp[[row, col]];
+
+                    hmm_builder.add_to_state_ctx_emit_prob_numerator(
+                        ctx,
                         TransState::Branch,
                         cur_read_base_enc,
-                        (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.ln_prob(TransState::Branch)
-                            + hmm_model
-                                .emit_ln_prob(
-                                    TransState::Branch,
-                                    encode_2_bases(cur_tpl_base, next_tpl_base),
-                                    cur_read_base_enc,
-                                )
-                            + beta_dp[[row, col]]),
+                        log_prob,
                     );
 
-                    hmm_builder.add_to_ctx_move_prob_numerator(
-                        encode_2_bases(cur_tpl_base, next_tpl_base),
-                        TransState::Branch,
-                        (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.ln_prob(TransState::Branch)
-                            + hmm_model
-                                .emit_ln_prob(
-                                    TransState::Branch,
-                                    encode_2_bases(cur_tpl_base, next_tpl_base),
-                                    cur_read_base_enc,
-                                )
-                            + beta_dp[[row, col]]),
-                    );
+                    hmm_builder.add_to_ctx_state_prob_numerator(ctx, TransState::Branch, log_prob);
                 } else {
-                    hmm_builder.add_to_move_ctx_emit_prob_numerator(
-                        encode_2_bases(cur_tpl_base, next_tpl_base),
+                    let log_prob = alpha_dp[[row - 1, col]]
+                        + cur_trans_prob.ln_prob(TransState::Stick)
+                        + hmm_model.emit_ln_prob(TransState::Stick, ctx, cur_read_base_enc)
+                        + beta_dp[[row, col]];
+                    hmm_builder.add_to_state_ctx_emit_prob_numerator(
+                        ctx,
                         TransState::Stick,
                         cur_read_base_enc,
-                        (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.ln_prob(TransState::Stick)
-                            + hmm_model
-                                .emit_ln_prob(
-                                    TransState::Stick,
-                                    encode_2_bases(cur_tpl_base, next_tpl_base),
-                                    cur_read_base_enc,
-                                )
-                            + beta_dp[[row, col]]),
+                        log_prob,
                     );
 
-                    hmm_builder.add_to_ctx_move_prob_numerator(
-                        encode_2_bases(cur_tpl_base, next_tpl_base),
-                        TransState::Stick,
-                        (alpha_dp[[row - 1, col]]
-                            + cur_trans_prob.ln_prob(TransState::Stick)
-                            + hmm_model
-                                .emit_ln_prob(
-                                    TransState::Stick,
-                                    encode_2_bases(cur_tpl_base, next_tpl_base),
-                                    cur_read_base_enc,
-                                )
-                            + beta_dp[[row, col]]),
-                    );
+                    hmm_builder.add_to_ctx_state_prob_numerator(ctx, TransState::Stick, log_prob);
                 }
             }
 
             if col > 1 {
-                hmm_builder.add_to_ctx_move_prob_numerator(
+                let log_prob = alpha_dp[[row, col - 1]]
+                    + prev_trans_probs.ln_prob(TransState::Dark)
+                    + beta_dp[[row, col]];
+                hmm_builder.add_to_ctx_state_prob_numerator(
                     encode_2_bases(prev_tpl_base, cur_tpl_base),
                     TransState::Dark,
-                    (alpha_dp[[row, col - 1]]
-                        + prev_trans_probs.ln_prob(TransState::Dark)
-                        + beta_dp[[row, col]]),
+                    log_prob,
                 );
             }
         }
@@ -299,18 +265,17 @@ pub fn train_with_single_instance(
     let (tot_row, tot_col) = (alpha_dp.shape()[0], alpha_dp.shape()[1]);
     let cur_tpl_base = tpl.last().unwrap().base();
     let cur_base_enc = *encoded_emit.last().unwrap();
-    hmm_builder.add_to_move_ctx_emit_prob_numerator(
+    hmm_builder.add_to_state_ctx_emit_prob_numerator(
         encode_2_bases(prev_tpl_base, cur_tpl_base),
         TransState::Match,
         cur_base_enc,
         (alpha_dp[[tot_row - 2, tot_col - 2]]
             + beta_dp[[tot_row - 1, tot_col - 1]]
-            + hmm_model
-                .emit_ln_prob(
-                    TransState::Match,
-                    encode_2_bases(prev_tpl_base, cur_tpl_base),
-                    cur_base_enc,
-                )),
+            + hmm_model.emit_ln_prob(
+                TransState::Match,
+                encode_2_bases(prev_tpl_base, cur_tpl_base),
+                cur_base_enc,
+            )),
     );
 }
 
