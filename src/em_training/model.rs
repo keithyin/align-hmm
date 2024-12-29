@@ -55,8 +55,8 @@ impl TemplatePos {
 
     pub fn prob(&self, state: TransState) -> f64 {
         let prob = self.probs[state as usize];
-        if prob < 1e-10 {
-            1e-10
+        if prob < 1e-100 {
+            1e-100
         } else {
             prob
         }

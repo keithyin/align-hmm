@@ -107,8 +107,8 @@ impl HmmModel {
     pub fn emit_prob(&self, movement: TransState, ctx: u8, emit: u8) -> f64 {
         assert!((movement as usize) < 3);
         let prob = self.emission_prob[[movement as usize, ctx as usize, emit as usize]];
-        if prob < 1e-10 {
-            1e-10
+        if prob < 1e-100 {
+            1e-100
         } else {
             prob
         }
@@ -121,8 +121,8 @@ impl HmmModel {
 
     pub fn ctx_state(&self, ctx: u8, movement: TransState) -> f64 {
         let prob = self.ctx_trans_prob[[ctx as usize, movement as usize]];
-        if prob < 1e-10 {
-            1e-10
+        if prob < 1e-100 {
+            1e-100
         } else {
             prob
         }
@@ -226,14 +226,14 @@ impl From<&HmmBuilder> for HmmModel {
 
 impl From<&HmmBuilderV2> for HmmModel {
     fn from(value: &HmmBuilderV2) -> Self {
-        let emit_eps = 1e-4;
+        let emit_eps = 1e-5;
         let trans_eps = 1e-3;
-        let ctx_prob_max = max_axis_2d(&value.ctx_move_prob_numerator, 1);
+        let ctx_prob_max = max_axis_2d(&value.ctx_state_prob_numerator, 1);
         assert_eq!(ctx_prob_max.shape(), &[NUM_CTX]);
         // println!("{:?}", value.ctx_move_prob_numerator);
         // println!("{:?}", ctx_prob_max);
         let ctx_move_prob = Array2::from_shape_fn((NUM_CTX, NUM_STATE), |(ctx, state)| {
-            (value.ctx_move_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]).exp() + trans_eps
+            (value.ctx_state_prob_numerator[[ctx, state]] - ctx_prob_max[ctx]).exp() + trans_eps
         });
         // println!("{:?}", ctx_move_prob);
         let ctx_prob = ctx_move_prob.sum_axis(Axis(1));
@@ -351,10 +351,10 @@ impl HmmBuilder {
 
 #[derive(Debug)]
 pub struct HmmBuilderV2 {
-    ctx_move_prob_numerator: Array2<f64>,      // 16 * 4
+    ctx_state_prob_numerator: Array2<f64>,      // 16 * 4
     state_ctx_emit_prob_numerator: Array3<f64>, // 3 * 16 * 64 ?
-    ctx_move_flag: Array2<bool>,
-    move_ctx_emit_flag: Array3<bool>,
+    ctx_state_flag: Array2<bool>,
+    state_ctx_emit_flag: Array3<bool>,
     log_likelihoods: Option<f64>,
     num_observations: usize
 }
@@ -362,10 +362,10 @@ pub struct HmmBuilderV2 {
 impl HmmBuilderV2 {
     pub fn new() -> Self {
         Self {
-            ctx_move_prob_numerator: Array2::from_elem((NUM_CTX, NUM_STATE), f64::MIN),
+            ctx_state_prob_numerator: Array2::from_elem((NUM_CTX, NUM_STATE), f64::MIN),
             state_ctx_emit_prob_numerator: Array3::from_elem((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), f64::MIN),
-            ctx_move_flag: Array2::from_shape_fn((NUM_CTX, NUM_STATE), |_| false),
-            move_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
+            ctx_state_flag: Array2::from_shape_fn((NUM_CTX, NUM_STATE), |_| false),
+            state_ctx_emit_flag: Array3::from_shape_fn((NUM_EMIT_STATE, NUM_CTX, NUM_EMIT), |_| {
                 false
             }),
             log_likelihoods: None,
@@ -374,12 +374,12 @@ impl HmmBuilderV2 {
     }
 
     pub fn add_to_ctx_state_prob_numerator(&mut self, ctx: u8, state: TransState, log_prob: f64) {
-        if !self.ctx_move_flag[[ctx as usize, state as usize]] {
-            self.ctx_move_prob_numerator[[ctx as usize, state as usize]] = log_prob;
-            self.ctx_move_flag[[ctx as usize, state as usize]] = true;
+        if !self.ctx_state_flag[[ctx as usize, state as usize]] {
+            self.ctx_state_prob_numerator[[ctx as usize, state as usize]] = log_prob;
+            self.ctx_state_flag[[ctx as usize, state as usize]] = true;
         } else {
-            self.ctx_move_prob_numerator[[ctx as usize, state as usize]] = stream_acc_log_prob(
-                self.ctx_move_prob_numerator[[ctx as usize, state as usize]],
+            self.ctx_state_prob_numerator[[ctx as usize, state as usize]] = stream_acc_log_prob(
+                self.ctx_state_prob_numerator[[ctx as usize, state as usize]],
                 log_prob,
             );
         }
@@ -394,10 +394,10 @@ impl HmmBuilderV2 {
     ) {
         assert!((state as usize) < 3);
 
-        if !self.move_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] {
+        if !self.state_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] {
             self.state_ctx_emit_prob_numerator[[state as usize, ctx as usize, emit as usize]] =
                 log_prob;
-            self.move_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] = true;
+            self.state_ctx_emit_flag[[state as usize, ctx as usize, emit as usize]] = true;
         } else {
             self.state_ctx_emit_prob_numerator[[state as usize, ctx as usize, emit as usize]] =
                 stream_acc_log_prob(
@@ -426,11 +426,11 @@ impl HmmBuilderV2 {
 
         for ctx in 0..NUM_CTX {
             for state in 0..NUM_STATE {
-                if other.ctx_move_flag[[ctx, state]] {
+                if other.ctx_state_flag[[ctx, state]] {
                     self.add_to_ctx_state_prob_numerator(
                         ctx as u8,
                         state.into(),
-                        other.ctx_move_prob_numerator[[ctx, state]],
+                        other.ctx_state_prob_numerator[[ctx, state]],
                     );
                 }
             }
@@ -440,7 +440,7 @@ impl HmmBuilderV2 {
         for state in 0..NUM_EMIT_STATE {
             for ctx in 0..NUM_CTX {
                 for emit in 0..NUM_EMIT {
-                    if other.move_ctx_emit_flag[[state, ctx, emit]] {
+                    if other.state_ctx_emit_flag[[state, ctx, emit]] {
                         self.add_to_state_ctx_emit_prob_numerator(
                             ctx as u8,
                             state.into(),
@@ -542,5 +542,20 @@ mod test {
         let v = stream_acc_log_prob(-1.0, -2.0);
         println!("{}", v.exp());
         println!("{}", (-1.0_f64).exp() + (-2.0_f64).exp());
+    }
+
+    #[test]
+    fn test_ln() {
+        println!("{}", 1e-2);
+        println!("{}", (1e-1000 as f64).ln());
+        println!("{}", (1e-100 as f64).ln());
+        println!("{}", (1e-10 as f64).ln());
+    }
+
+    #[test]
+    fn test_exp() {
+        println!("{}", (-1000.0 as f64).exp());
+        println!("{}", 1.0 / (-1000.0 as f64).exp());
+        
     }
 }

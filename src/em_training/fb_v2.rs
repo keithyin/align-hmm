@@ -34,12 +34,11 @@ pub fn forward_with_log_sum_exp_trick(
             if (row > 1 && col > 1) || (row == 1 && col == 1) {
                 let this_move_score = dp_matrix[[row - 1, col - 1]]
                     + prev_trans_probs.ln_prob(TransState::Match)
-                    + hmm_model
-                        .emit_ln_prob(
-                            TransState::Match,
-                            encode_2_bases(prev_tpl_base, cur_tpl_base),
-                            cur_read_base_enc,
-                        );
+                    + hmm_model.emit_ln_prob(
+                        TransState::Match,
+                        encode_2_bases(prev_tpl_base, cur_tpl_base),
+                        cur_read_base_enc,
+                    );
                 scores.push(this_move_score);
             }
 
@@ -68,8 +67,27 @@ pub fn forward_with_log_sum_exp_trick(
                                     cur_read_base_enc,
                                 )
                     };
-
                 scores.push(this_move_score);
+
+                // scores.push(
+                //     dp_matrix[[row - 1, col]]
+                //         + cur_trans_probs.ln_prob(TransState::Branch)
+                //         + hmm_model.emit_ln_prob(
+                //             TransState::Branch,
+                //             encode_2_bases(cur_tpl_base, next_tpl_base),
+                //             cur_read_base_enc,
+                //         ),
+                // );
+
+                // scores.push(
+                //     dp_matrix[[row - 1, col]]
+                //         + cur_trans_probs.ln_prob(TransState::Stick)
+                //         + hmm_model.emit_ln_prob(
+                //             TransState::Stick,
+                //             encode_2_bases(cur_tpl_base, next_tpl_base),
+                //             cur_read_base_enc,
+                //         ),
+                // );
             }
 
             if col > 1 {
@@ -89,12 +107,11 @@ pub fn forward_with_log_sum_exp_trick(
 
     let cur_tpl_base = template.last().unwrap().base();
     dp_matrix[[dp_rows - 1, dp_cols - 1]] = dp_matrix[[dp_rows - 2, dp_cols - 2]]
-        + hmm_model
-            .emit_ln_prob(
-                TransState::Match,
-                encode_2_bases(prev_tpl_base, cur_tpl_base),
-                *encoded_query.last().unwrap(),
-            );
+        + hmm_model.emit_ln_prob(
+            TransState::Match,
+            encode_2_bases(prev_tpl_base, cur_tpl_base),
+            *encoded_query.last().unwrap(),
+        );
 
     dp_matrix
 }
@@ -122,22 +139,19 @@ pub fn backward_with_log_sum_exp_trick(
             let mut scores = vec![];
             // match
             if (row + 1) == (dp_rows - 1) && (col + 1) == (dp_cols - 1) {
-                let this_move_score = hmm_model
-                    .emit_ln_prob(
+                let this_move_score = hmm_model.emit_ln_prob(
+                    TransState::Match,
+                    encode_2_bases(cur_tpl_base, next_tpl_base),
+                    next_read_base_enc,
+                ) + dp_matrix[[row + 1, col + 1]];
+                scores.push(this_move_score);
+            } else if (row + 1) < (dp_rows - 1) && (col + 1) < (dp_cols - 1) {
+                let this_move_score = cur_trans_probs.ln_prob(TransState::Match)
+                    + hmm_model.emit_ln_prob(
                         TransState::Match,
                         encode_2_bases(cur_tpl_base, next_tpl_base),
                         next_read_base_enc,
                     )
-                    + dp_matrix[[row + 1, col + 1]];
-                scores.push(this_move_score);
-            } else if (row + 1) < (dp_rows - 1) && (col + 1) < (dp_cols - 1) {
-                let this_move_score = cur_trans_probs.ln_prob(TransState::Match)
-                    + hmm_model
-                        .emit_ln_prob(
-                            TransState::Match,
-                            encode_2_bases(cur_tpl_base, next_tpl_base),
-                            next_read_base_enc,
-                        )
                     + dp_matrix[[row + 1, col + 1]];
                 scores.push(this_move_score);
             }
@@ -165,6 +179,26 @@ pub fn backward_with_log_sum_exp_trick(
                 };
 
                 scores.push(this_move_score);
+
+                // scores.push(
+                //     cur_trans_probs.ln_prob(TransState::Branch)
+                //         + hmm_model.emit_ln_prob(
+                //             TransState::Branch,
+                //             encode_2_bases(cur_tpl_base, next_tpl_base),
+                //             next_read_base_enc,
+                //         )
+                //         + dp_matrix[[row + 1, col]],
+                // );
+
+                // scores.push(
+                //     cur_trans_probs.ln_prob(TransState::Stick)
+                //         + hmm_model.emit_ln_prob(
+                //             TransState::Stick,
+                //             encode_2_bases(cur_tpl_base, next_tpl_base),
+                //             next_read_base_enc,
+                //         )
+                //         + dp_matrix[[row + 1, col]],
+                // );
             }
 
             if col < (dp_cols - 2) {
@@ -179,17 +213,14 @@ pub fn backward_with_log_sum_exp_trick(
     }
     let default_tpl_pos = TemplatePos::default();
     let default_tpl_base = default_tpl_pos.base();
-    dp_matrix[[0, 0]] = hmm_model
-        .emit_ln_prob(
-            TransState::Match,
-            encode_2_bases(default_tpl_base, template.first().unwrap().base()),
-            *encoded_query.first().unwrap(),
-        )
-        + dp_matrix[[1, 1]];
+    dp_matrix[[0, 0]] = hmm_model.emit_ln_prob(
+        TransState::Match,
+        encode_2_bases(default_tpl_base, template.first().unwrap().base()),
+        *encoded_query.first().unwrap(),
+    ) + dp_matrix[[1, 1]];
 
     dp_matrix
 }
-
 
 #[cfg(test)]
 mod test {
@@ -199,11 +230,12 @@ mod test {
     use crate::{
         dataset::encode_emit,
         em_training::{
-            fb::veterbi_decode, fb_v2::{backward_with_log_sum_exp_trick, forward_with_log_sum_exp_trick}, model::Template
+            fb::veterbi_decode,
+            fb_v2::{backward_with_log_sum_exp_trick, forward_with_log_sum_exp_trick},
+            model::Template,
         },
         hmm_models::v1,
     };
-
 
     #[test]
     fn test_forward_backward() {

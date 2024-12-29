@@ -47,8 +47,8 @@ fn main() {
         Subcommands::EmTraining(trainig_param) => {
             // tracing::info!("init hmm model");
             // let init_hmm_model = train_model_entrance_parallel(&trainig_param);
-            let init_hmm_model = boundaries_4_100::get_hmm_model();
-            // let init_hmm_model = HmmModel::new_uniform();
+            // let init_hmm_model = boundaries_4_100::get_hmm_model();
+            let init_hmm_model = HmmModel::new_uniform();
             tracing::info!("init hmm model done, start em training");
             em_training(&trainig_param, init_hmm_model);
         }

@@ -1,4 +1,8 @@
-use std::{cmp, collections::HashMap, fmt::{Debug, Display}};
+use std::{
+    cmp,
+    collections::HashMap,
+    fmt::{Debug, Display},
+};
 
 use bio::alignment::pairwise::Aligner;
 use gskits::{
@@ -15,6 +19,8 @@ use mm2::{
     params::{AlignParams, OupParams},
 };
 use rust_htslib::bam::{self, ext::BamRecordExtensions, Record};
+
+use crate::{dataset::encode_emit, em_training::{fb::veterbi_decode, model::Template}, hmm_model::HmmModel};
 
 lazy_static! {
     pub static ref BASE_MAP: HashMap<u8, usize> = {
@@ -56,7 +62,7 @@ impl From<usize> for TransState {
             1 => TransState::Branch,
             2 => TransState::Stick,
             3 => TransState::Dark,
-            _ => panic!("invalid value:{}", value)
+            _ => panic!("invalid value:{}", value),
         }
     }
 }
@@ -150,6 +156,78 @@ impl TrainInstance {
 
     pub fn dw(&self) -> &Vec<Option<u8>> {
         &self.dw_buckets
+    }
+
+    pub fn chunk(&self, chunk_size: usize) -> Vec<TrainInstance> {
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        let mut end = 0;
+
+        while start < self.ref_aligned_seq.len() {
+            end = (start + chunk_size).min(self.ref_aligned_seq.len());
+            if end == self.ref_aligned_seq.len() {
+                break;
+            }
+
+            // 检查是否满足条件：当前 chunk 的左右 5 个位置都没有 `-`
+            loop {
+                if self.is_valid_chunk_pos(end) {
+                    chunks.push(TrainInstance {
+                        name: self.name.clone(),
+                        ref_aligned_seq: self.ref_aligned_seq[start..end].to_string(),
+                        read_aligned_seq: self.read_aligned_seq[start..end].to_string(),
+                        dw_buckets: self.dw_buckets[start..end].to_vec(),
+                    });
+                    start = end;
+                    break;
+                }
+                end = (end + 1).min(self.ref_aligned_seq.len());
+
+                if end >= self.ref_aligned_seq.len() {
+                    break;
+                }
+            }
+            if end >= self.ref_aligned_seq.len() {
+                break;
+            }
+        }
+
+        if start != end {
+            chunks.push(TrainInstance {
+                name: self.name.clone(),
+                ref_aligned_seq: self.ref_aligned_seq[start..end].to_string(),
+                read_aligned_seq: self.read_aligned_seq[start..end].to_string(),
+                dw_buckets: self.dw_buckets[start..end].to_vec(),
+            });
+        }
+
+        chunks
+    }
+
+    fn is_valid_chunk_pos(&self, pos: usize) -> bool {
+        let left_check = pos.saturating_sub(5);
+        let right_check = (pos + 5).min(self.ref_aligned_seq.len());
+
+        // 检查左右范围内是否有 `-`
+        !self.ref_aligned_seq[left_check..right_check].contains('-')
+            && !self.read_aligned_seq[left_check..right_check].contains('-')
+    }
+
+    pub fn hmm_alignment(&self, hmm_model: &HmmModel) -> (&str, String) {
+        let rseq = self.ref_aligned_seq().replace('-', "");
+        let qseq = self.read_aligned_seq().replace('-', "");
+        let dwell_time = self
+            .dw()
+            .iter()
+            .filter(|v| v.is_some())
+            .map(|v| v.unwrap())
+            .collect::<Vec<u8>>();
+
+        assert_eq!(qseq.len(), dwell_time.len());
+
+        let tpl = Template::from_template_bases(rseq.as_bytes(), hmm_model);
+        let encoded_emit = encode_emit(&dwell_time, &qseq);
+        (&self.name, veterbi_decode(&encoded_emit, &tpl, hmm_model))
     }
 
     pub fn ref_cur_pos2next_ref(&self) -> HashMap<usize, usize> {
@@ -444,7 +522,6 @@ pub fn local_alignment_to_record(target: &str, query: &str, qname: Option<&str>)
     record
 }
 
-
 #[cfg(test)]
 mod test {
     use gskits::{
@@ -454,8 +531,7 @@ mod test {
     use rust_htslib::bam::{self, ext::BamRecordExtensions, Read};
     use std::collections::HashMap;
 
-
-    use super::{ local_alignment_to_record, TrainInstance};
+    use super::{local_alignment_to_record, TrainInstance};
 
     #[test]
     fn test_train_instance() {

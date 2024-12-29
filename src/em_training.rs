@@ -96,7 +96,7 @@ pub fn em_training(params: &TrainingParams, mut hmm_model: HmmModel) {
             if let Some(last_ll_) = last_ll {
                 let delta = (cur_ll - last_ll_).abs();
                 tracing::info!("epoch:{}, delta:{}", epoch, delta);
-                if delta < 1e-6 {
+                if delta < 1e-4 {
                     finished = true;
                 }
                 last_ll = Some(cur_ll);
@@ -127,12 +127,19 @@ pub fn train_worker(
     let mut hmm_builder = HmmBuilderV2::new();
     let mut ins_cnt = 0;
     for train_ins in train_ins_receiver {
-        train_with_single_instance(
-            &train_ins,
-            hmm_model,
-            &mut hmm_builder,
-            ins_cnt == 0 && idx == 0,
-        );
+        if ins_cnt == 0 && idx == 0 {
+            let (qname, align_seq) = train_ins.hmm_alignment(hmm_model);
+            tracing::info!("qname:{}, align_seq:{}", qname, align_seq);
+        }
+        train_ins
+            .chunk(10000000)
+            .into_iter()
+            .enumerate()
+            .for_each(|(ins_idx, train_ins)| {
+                let ll = train_with_single_instance(&train_ins, hmm_model, &mut hmm_builder);
+                hmm_builder.add_log_likehood(ll, if ins_idx == 0 { 1 } else { 0 });
+            });
+
         ins_cnt += 1;
     }
 
@@ -143,8 +150,7 @@ pub fn train_with_single_instance(
     train_ins: &TrainInstance,
     hmm_model: &HmmModel,
     hmm_builder: &mut HmmBuilderV2,
-    print_align_result: bool,
-) {
+) -> f64 {
     let rseq = train_ins.ref_aligned_seq().replace('-', "");
     let qseq = train_ins.read_aligned_seq().replace('-', "");
     let dwell_time = train_ins
@@ -159,17 +165,12 @@ pub fn train_with_single_instance(
     let tpl = Template::from_template_bases(rseq.as_bytes(), hmm_model);
     let encoded_emit = encode_emit(&dwell_time, &qseq);
 
-    if print_align_result {
-        tracing::info!(
-            "qname: {}, align:\n{}",
-            train_ins.name,
-            veterbi_decode(&encoded_emit, &tpl, hmm_model)
-        );
-    }
-
     let alpha_dp = forward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
     let beta_dp = backward_with_log_sum_exp_trick(&encoded_emit, &tpl, hmm_model);
-    hmm_builder.add_log_likehood(beta_dp[[0, 0]], 1);
+    let (dp_row, dp_col) = (alpha_dp.shape()[0], alpha_dp.shape()[1]);
+    assert!((alpha_dp[[dp_row - 1, dp_col - 1]] - beta_dp[[0, 0]]).abs() < 1e-4);
+
+    let ll = beta_dp[[0, 0]];
 
     assert_eq!(alpha_dp.shape(), beta_dp.shape());
 
@@ -277,6 +278,7 @@ pub fn train_with_single_instance(
                 cur_base_enc,
             )),
     );
+    ll
 }
 
 #[cfg(test)]
@@ -298,7 +300,7 @@ mod test {
         for _ in 0..10 {
             let mut hmm_builder = HmmBuilderV2::new();
             for idx in 0..100 {
-                train_with_single_instance(&train_ins, &hmm_model, &mut hmm_builder, idx == 0);
+                train_with_single_instance(&train_ins, &hmm_model, &mut hmm_builder);
             }
             hmm_model = (&hmm_builder).into();
             hmm_model.print_params();
