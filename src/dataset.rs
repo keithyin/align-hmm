@@ -66,9 +66,9 @@ pub fn align_record_read_worker(
     while let Some(v) = aligned_bam_reader.read(&mut align_record) {
         pbar.lock().unwrap().inc(1);
         cnt += 1;
-        if cnt > 10 {
-            break;
-        }
+        // if cnt > 10 {
+        //     break;
+        // }
         if v.is_ok() {
             let tid = align_record.tid();
             if !tid2refname.contains_key(&tid) {
